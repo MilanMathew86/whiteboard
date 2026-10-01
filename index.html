@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Whiteboard</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="board" data-tool="pen">
+    <canvas id="grid"></canvas>
+    <canvas id="canvas"></canvas>
+  </div>
+
+  <div class="toolbar" role="toolbar" aria-label="Whiteboard tools">
+    <div class="group" id="tools">
+      <button class="btn" data-tool="hand" title="Hand — pan (H, or hold Space)">
+        <svg viewBox="0 0 24 24"><path d="M18 11V6a2 2 0 0 0-4 0v5"/><path d="M14 10V4a2 2 0 0 0-4 0v6"/><path d="M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-6-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg>
+      </button>
+      <button class="btn active" data-tool="pen" title="Pen (P)">
+        <svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+      </button>
+      <button class="btn" data-tool="highlighter" title="Highlighter (M)">
+        <svg viewBox="0 0 24 24"><path d="m9 11-6 6v3h9l3-3"/><path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/></svg>
+      </button>
+      <button class="btn" data-tool="eraser" title="Eraser (E)">
+        <svg viewBox="0 0 24 24"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/></svg>
+      </button>
+      <span class="divider"></span>
+      <button class="btn" data-tool="line" title="Line (L) — hold Shift to snap">
+        <svg viewBox="0 0 24 24"><path d="M5 19 19 5"/></svg>
+      </button>
+      <button class="btn" data-tool="arrow" title="Arrow (A) — hold Shift to snap">
+        <svg viewBox="0 0 24 24"><path d="M5 19 19 5"/><path d="M9 5h10v10"/></svg>
+      </button>
+      <button class="btn" data-tool="rect" title="Rectangle (R) — hold Shift for square">
+        <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/></svg>
+      </button>
+      <button class="btn" data-tool="ellipse" title="Ellipse (O) — hold Shift for circle">
+        <svg viewBox="0 0 24 24"><ellipse cx="12" cy="12" rx="9" ry="7"/></svg>
+      </button>
+      <button class="btn" data-tool="text" title="Text (T)">
+        <svg viewBox="0 0 24 24"><path d="M4 7V4h16v3"/><path d="M9 20h6"/><path d="M12 4v16"/></svg>
+      </button>
+      <button class="btn" id="fillToggle" title="Fill shapes (F)" aria-pressed="false">
+        <svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3" class="fill-icon"/></svg>
+      </button>
+    </div>
+
+    <span class="divider"></span>
+
+    <div class="group" id="colors">
+      <button class="swatch active" data-color="#1e1e1e" style="--c:#1e1e1e" title="Black"></button>
+      <button class="swatch" data-color="#e03131" style="--c:#e03131" title="Red"></button>
+      <button class="swatch" data-color="#2f9e44" style="--c:#2f9e44" title="Green"></button>
+      <button class="swatch" data-color="#1971c2" style="--c:#1971c2" title="Blue"></button>
+      <button class="swatch" data-color="#f08c00" style="--c:#f08c00" title="Orange"></button>
+      <button class="swatch" data-color="#9c36b5" style="--c:#9c36b5" title="Purple"></button>
+      <label class="swatch custom" title="Custom color">
+        <input type="color" id="customColor" value="#0c8599">
+      </label>
+    </div>
+
+    <span class="divider"></span>
+
+    <div class="group size">
+      <input type="range" id="size" min="1" max="40" value="4" title="Stroke size ([ and ])">
+      <span class="size-value" id="sizeValue">4</span>
+    </div>
+
+    <span class="divider"></span>
+
+    <div class="group">
+      <button class="btn" id="undo" title="Undo (Ctrl+Z)" disabled>
+        <svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>
+      </button>
+      <button class="btn" id="redo" title="Redo (Ctrl+Y)" disabled>
+        <svg viewBox="0 0 24 24"><path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg>
+      </button>
+      <button class="btn" id="clear" title="Clear board">
+        <svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+      </button>
+      <button class="btn" id="export" title="Export as PNG (Ctrl+S)">
+        <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="panel zoom">
+    <button class="btn" id="zoomOut" title="Zoom out (-)">
+      <svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg>
+    </button>
+    <button class="zoom-pct" id="zoomPct" title="Reset view (0)">100%</button>
+    <button class="btn" id="zoomIn" title="Zoom in (+)">
+      <svg viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+    </button>
+  </div>
+
+  <div class="panel help-wrap">
+    <button class="btn" id="helpBtn" title="Keyboard shortcuts (?)">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
+    </button>
+  </div>
+
+  <div class="help" id="help" hidden>
+    <h2>Shortcuts</h2>
+    <dl>
+      <dt>P</dt><dd>Pen</dd>
+      <dt>M</dt><dd>Highlighter</dd>
+      <dt>E</dt><dd>Eraser</dd>
+      <dt>L / A</dt><dd>Line / Arrow</dd>
+      <dt>R / O</dt><dd>Rectangle / Ellipse</dd>
+      <dt>T</dt><dd>Text</dd>
+      <dt>F</dt><dd>Toggle shape fill</dd>
+      <dt>H, Space</dt><dd>Pan (or middle mouse)</dd>
+      <dt>Shift</dt><dd>Snap angle / square / circle</dd>
+      <dt>[ / ]</dt><dd>Smaller / larger stroke</dd>
+      <dt>Wheel</dt><dd>Zoom at cursor</dd>
+      <dt>+ / − / 0</dt><dd>Zoom in / out / reset</dd>
+      <dt>Ctrl+Z</dt><dd>Undo</dd>
+      <dt>Ctrl+Y</dt><dd>Redo</dd>
+      <dt>Ctrl+S</dt><dd>Export PNG</dd>
+    </dl>
+  </div>
+
+  <div class="toast" id="toast" role="status"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
