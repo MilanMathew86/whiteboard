@@ -43,6 +43,7 @@ html, body {
 #grid { pointer-events: none; }
 
 #board[data-tool="text"] { cursor: text; }
+#board[data-tool="select"] { cursor: default; }
 #board[data-tool="hand"],
 #board.space { cursor: grab; }
 #board.grabbing { cursor: grabbing; }
