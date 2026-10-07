@@ -1,4 +1,4 @@
-﻿(() => {
+(() => {
   'use strict';
 
   const FONT = 'system-ui, "Segoe UI", Roboto, sans-serif';
@@ -257,8 +257,13 @@
 
   // ---------- History & persistence ----------
 
-  function commit(next) {
-    undoStack.push(shapes);
+  // History entries are { shapes, action, t }: the board snapshot on the other side of one
+  // action, plus what that action was and when it happened (ms since epoch). An undo entry
+  // holds the state *before* its action and a redo entry the state *after*, so moving an entry
+  // between the stacks keeps its action and timestamp. Reading the undo stack in order, then
+  // the current board, gives the timestamped timeline used for replay.
+  function commit(next, action) {
+    undoStack.push({ shapes, action, t: Date.now() });
     if (undoStack.length > MAX_HISTORY) undoStack.shift();
     redoStack = [];
     shapes = next;
@@ -267,42 +272,126 @@
 
   function undo() {
     if (!undoStack.length) return;
-    redoStack.push(shapes);
-    shapes = undoStack.pop();
+    const entry = undoStack.pop();
+    redoStack.push({ shapes, action: entry.action, t: entry.t });
+    shapes = entry.shapes;
     afterChange();
   }
 
   function redo() {
     if (!redoStack.length) return;
-    undoStack.push(shapes);
-    shapes = redoStack.pop();
+    const entry = redoStack.pop();
+    undoStack.push({ shapes, action: entry.action, t: entry.t });
+    shapes = entry.shapes;
     afterChange();
   }
 
-  function afterChange() {
+  function strokeAction(s) {
+    if (s.type === 'eraser') return 'erase';
+    if (s.type === 'pen' || s.type === 'highlighter') return 'stroke';
+    return 'shape';
+  }
+
+  function updateHistoryButtons() {
     $('#undo').disabled = !undoStack.length;
     $('#redo').disabled = !redoStack.length;
+  }
+
+  function afterChange() {
+    updateHistoryButtons();
     scheduleRender();
     scheduleSave();
   }
 
   function scheduleSave() {
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => {
+    saveTimer = setTimeout(save, 300);
+  }
+
+  function save() {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(serialize(true)));
+    } catch {
+      // History holds many snapshots; if it won't fit, keep at least the current board.
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify({ shapes, view }));
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(serialize(false)));
+        toast('Storage is full — saved the board without its undo/replay history');
       } catch {
-        toast('Could not save â€” browser storage is full or unavailable');
+        toast('Could not save — browser storage is full or unavailable');
       }
-    }, 300);
+    }
+  }
+
+  // Snapshots share unchanged shape objects, so each distinct shape (and each image's data
+  // URL) is stored once in a pool and snapshots are saved as lists of pool indexes.
+  function serialize(withHistory) {
+    const pool = [];
+    const poolIndex = new Map();
+    const assets = [];
+    const assetIndex = new Map();
+
+    const ref = (s) => {
+      if (!poolIndex.has(s)) {
+        let stored = s;
+        if (s.type === 'image') {
+          if (!assetIndex.has(s.src)) assetIndex.set(s.src, assets.push(s.src) - 1);
+          const { src, ...rest } = s;
+          stored = { ...rest, asset: assetIndex.get(src) };
+        }
+        poolIndex.set(s, pool.push(stored) - 1);
+      }
+      return poolIndex.get(s);
+    };
+    const entry = (e) => ({ s: e.shapes.map(ref), a: e.action, t: e.t });
+
+    const data = { v: 2, view, shapes: shapes.map(ref) };
+    if (withHistory) {
+      data.undo = undoStack.map(entry);
+      data.redo = redoStack.map(entry);
+    }
+    data.pool = pool;
+    data.assets = assets;
+    return data;
+  }
+
+  function deserialize(data) {
+    const pool = data.pool.map((s) => {
+      if (s.type !== 'image') return s;
+      const { asset, ...rest } = s;
+      return { ...rest, src: data.assets[asset] };
+    });
+    const deref = (ids) => ids.map((i) => pool[i]);
+    const entry = (e) => ({ shapes: deref(e.s), action: e.a, t: e.t });
+    shapes = deref(data.shapes);
+    undoStack = (data.undo || []).map(entry);
+    redoStack = (data.redo || []).map(entry);
   }
 
   function load() {
     try {
       const data = JSON.parse(localStorage.getItem(STORAGE_KEY));
-      if (data && Array.isArray(data.shapes)) shapes = data.shapes;
-      if (data && data.view && data.view.scale) view = data.view;
-    } catch { /* start with an empty board */ }
+      if (!data) return;
+      if (data.v === 2) deserialize(data);
+      else if (Array.isArray(data.shapes)) shapes = data.shapes;  // v1: board only, no history
+      if (data.view && data.view.scale) view = data.view;
+    } catch {
+      shapes = [];
+      undoStack = [];
+      redoStack = [];
+    }
+  }
+
+  // The board's history as a timestamped list of states, oldest first. The first entry is
+  // the board before the oldest remembered action; redone-away states are not included.
+  function timeline() {
+    const states = undoStack.map((e, i) => ({
+      shapes: e.shapes,
+      action: i ? undoStack[i - 1].action : null,
+      t: i ? undoStack[i - 1].t : null,
+    }));
+    const latest = undoStack[undoStack.length - 1];
+    states.push({ shapes, action: latest ? latest.action : null, t: latest ? latest.t : null });
+    return states;
   }
 
   // ---------- Pointer input ----------
@@ -447,10 +536,10 @@
     }
 
     if (drag) {
-      const { orig, shape } = drag;
+      const { orig, shape, mode } = drag;
       drag = null;
       if (shape !== orig && e.type !== 'pointercancel') {
-        commit(shapes.map((s) => (s.id === orig.id ? shape : s)));
+        commit(shapes.map((s) => (s.id === orig.id ? shape : s)), mode);
       } else {
         scheduleRender();
       }
@@ -469,7 +558,7 @@
     }
     const degenerate = !s.points && s.x1 === s.x2 && s.y1 === s.y2;
     if (degenerate || e.type === 'pointercancel') scheduleRender();
-    else commit([...shapes, s]);
+    else commit([...shapes, s], strokeAction(s));
   }
 
   canvas.addEventListener('pointerup', endGesture);
@@ -538,7 +627,7 @@
       const text = ta.value.replace(/\s+$/, '');
       ta.remove();
       textEditor = null;
-      if (text.trim()) commit([...shapes, { type: 'text', x: round(p.x), y: round(p.y), text, color, fontSize }]);
+      if (text.trim()) commit([...shapes, { type: 'text', x: round(p.x), y: round(p.y), text, color, fontSize }], 'text');
     });
 
     setTimeout(() => ta.focus(), 0);
@@ -678,7 +767,7 @@
     }
     if (!added.length) return;
 
-    commit([...shapes, ...added]);
+    commit([...shapes, ...added], 'image');
     setTool('select');
     selectedId = added[added.length - 1].id;
     scheduleRender();
@@ -688,7 +777,7 @@
     const id = selectedId;
     if (!id || !shapes.some((s) => s.id === id)) return;
     selectedId = null;
-    commit(shapes.filter((s) => s.id !== id));
+    commit(shapes.filter((s) => s.id !== id), 'delete');
   }
 
   // ---------- UI ----------
@@ -725,8 +814,8 @@
 
   function clearBoard() {
     if (!shapes.length) return;
-    commit([]);
-    toast('Board cleared â€” Ctrl+Z to undo');
+    commit([], 'clear');
+    toast('Board cleared — Ctrl+Z to undo');
   }
 
   let toastTimer = 0;
@@ -843,7 +932,11 @@
   // ---------- Init ----------
 
   load();
+  updateHistoryButtons();
   setTool(state.tool);
   setSize(state.size);
   resize();
+
+  // Read-only hook for the replay feature (and for inspecting history from the console).
+  window.whiteboard = { timeline };
 })();
