@@ -16,6 +16,10 @@
   const REPLAY_LEAD_IN = 400;     // ms of empty board before the first action
   const REPLAY_TAIL = 800;        // ms the finished board stays up at the end
   const REPLAY_SHAPE_MS = 300;    // ms a line/arrow/rect/ellipse takes to grow
+  const API_KEY_STORAGE = 'whiteboard.anthropicKey';  // kept apart from the board save
+  const INK = ['pen', 'highlighter'];  // what the lasso selects
+  const CAPTURE_PAD = 24;         // px of white around a captured selection
+  const CAPTURE_MAX_SIDE = 1568;  // px; long edge of a capture (a good size for Claude's vision)
 
   const $ = (sel) => document.querySelector(sel);
   const board = $('#board');
@@ -40,6 +44,8 @@
   let selectedId = null;    // id of the selected image (select tool)
   let drag = null;           // { mode: 'move' | 'resize', orig, start, shape }
   const imageCache = new Map();
+  let lasso = null;          // loop being drawn with the lasso tool: { points }
+  let lassoSelection = [];   // ink strokes selected by the last lasso
   let replay = null;         // open replay session, see the Replay section
   let replaySpeed = 1;
   let rafId = 0;
@@ -88,7 +94,9 @@
       for (const s of shapes) drawShape(ctx, drag && s.id === drag.orig.id ? drag.shape : s);
       if (current) drawShape(ctx, current);
       drawSelection();
+      drawLasso();
     }
+    positionLassoMenu();
     $('#zoomPct').textContent = Math.round(view.scale * 100) + '%';
   }
 
@@ -430,6 +438,15 @@
       return;
     }
 
+    if (state.tool === 'lasso') {
+      lasso = { points: [p] };
+      lassoSelection = [];
+      activePointer = e.pointerId;
+      canvas.setPointerCapture(e.pointerId);
+      scheduleRender();
+      return;
+    }
+
     if (state.tool === 'select') {
       const sel = selectedShape();
       if (sel && hitResizeHandle(sel, p)) {
@@ -472,6 +489,12 @@
     if (panning) {
       view.x = panning.vx + e.clientX - panning.sx;
       view.y = panning.vy + e.clientY - panning.sy;
+      scheduleRender();
+      return;
+    }
+
+    if (lasso) {
+      lasso.points.push(toWorld(e.clientX, e.clientY));
       scheduleRender();
       return;
     }
@@ -544,6 +567,14 @@
       panning = null;
       board.classList.remove('grabbing');
       scheduleSave();
+      return;
+    }
+
+    if (lasso) {
+      const loop = lasso.points;
+      lasso = null;
+      lassoSelection = e.type === 'pointercancel' ? [] : strokesInLoop(loop);
+      scheduleRender();
       return;
     }
 
@@ -798,6 +829,132 @@
     commit(shapes.filter((s) => s.id !== id), 'delete');
   }
 
+  // ---------- Lasso ----------
+
+  function pointInPolygon(p, poly) {
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const a = poly[i];
+      const b = poly[j];
+      if ((a.y > p.y) !== (b.y > p.y) && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
+    }
+    return inside;
+  }
+
+  // Ink strokes with at least half of their points inside the loop (forgiving of loose loops).
+  function strokesInLoop(loop) {
+    if (loop.length < 3) return [];
+    return shapes.filter((s) => INK.includes(s.type)
+      && s.points.filter((p) => pointInPolygon(p, loop)).length >= s.points.length / 2);
+  }
+
+  // The selection minus any strokes no longer on the board (e.g. after an undo).
+  function liveLassoSelection() {
+    if (lassoSelection.length) {
+      const onBoard = new Set(shapes);
+      lassoSelection = lassoSelection.filter((s) => onBoard.has(s));
+    }
+    return lassoSelection;
+  }
+
+  // Board-space box around the selected strokes, with a little breathing room.
+  function lassoBox() {
+    const sel = liveLassoSelection();
+    if (!sel.length) return null;
+    const b = unionBounds(sel);
+    const pad = 8 / view.scale;
+    return [b[0] - pad, b[1] - pad, b[2] + pad, b[3] + pad];
+  }
+
+  function drawLasso() {
+    const px = 1 / view.scale;  // one screen pixel in world units
+    ctx.save();
+    ctx.strokeStyle = '#4f46e5';
+    ctx.lineWidth = 1.5 * px;
+    ctx.setLineDash([6 * px, 4 * px]);
+    if (lasso && lasso.points.length > 1) {
+      ctx.beginPath();
+      lasso.points.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(79, 70, 229, 0.06)';
+      ctx.fill();
+      ctx.stroke();
+    }
+    const box = lassoBox();
+    if (box) ctx.strokeRect(box[0], box[1], box[2] - box[0], box[3] - box[1]);
+    ctx.restore();
+  }
+
+  // Keep the Solve Math / Clean Diagram menu next to the selection as the view pans and zooms.
+  function positionLassoMenu() {
+    const menu = $('#lassoMenu');
+    const box = !replay && !lasso && lassoBox();
+    menu.hidden = !box;
+    if (!box) return;
+    const cx = ((box[0] + box[2]) / 2) * view.scale + view.x;
+    const top = box[1] * view.scale + view.y;
+    const bottom = box[3] * view.scale + view.y;
+    const w = menu.offsetWidth;
+    const h = menu.offsetHeight;
+    const toolbarBottom = $('.toolbar').getBoundingClientRect().bottom;
+    // Prefer just above the selection; drop below it if that would tuck under the toolbar.
+    let y = top - h - 8;
+    if (y < toolbarBottom + 8) y = bottom + 8;
+    y = Math.min(y, window.innerHeight - h - 8);
+    const x = Math.min(Math.max(8, cx - w / 2), window.innerWidth - w - 8);
+    menu.style.left = x + 'px';
+    menu.style.top = y + 'px';
+  }
+
+  // ---------- Capture ----------
+
+  const boxesOverlap = (a, b) => a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1];
+
+  // Render just the selected strokes on white, with padding, as a base64 PNG for Claude.
+  // Also returns the mapping back to the board for placing results:
+  //   board = origin + imagePixel / scale
+  function captureSelection(sel) {
+    const box = unionBounds(sel);
+    const w = Math.max(box[2] - box[0], 1);
+    const h = Math.max(box[3] - box[1], 1);
+    const scale = Math.min(2, (CAPTURE_MAX_SIDE - 2 * CAPTURE_PAD) / Math.max(w, h));
+    const width = Math.ceil(w * scale + 2 * CAPTURE_PAD);
+    const height = Math.ceil(h * scale + 2 * CAPTURE_PAD);
+    const origin = { x: box[0] - CAPTURE_PAD / scale, y: box[1] - CAPTURE_PAD / scale };
+
+    // Ink layer: the selected strokes in board order, plus eraser strokes over them so erased
+    // parts stay erased. It's transparent so the erasers can't punch holes in the white.
+    const chosen = new Set(sel);
+    const layer = document.createElement('canvas');
+    layer.width = width;
+    layer.height = height;
+    const lc = layer.getContext('2d');
+    lc.setTransform(scale, 0, 0, scale, -origin.x * scale, -origin.y * scale);
+    for (const s of shapes) {
+      if (chosen.has(s) || (s.type === 'eraser' && boxesOverlap(bounds(s), box))) drawShape(lc, s);
+    }
+
+    const out = document.createElement('canvas');
+    out.width = width;
+    out.height = height;
+    const oc = out.getContext('2d');
+    oc.fillStyle = '#ffffff';
+    oc.fillRect(0, 0, width, height);
+    oc.drawImage(layer, 0, 0);
+
+    const base64 = out.toDataURL('image/png').split(',')[1];
+    return { base64, mediaType: 'image/png', width, height, scale, origin };
+  }
+
+  // Temporary for steps 1–3: show what would be sent, so the capture can be checked.
+  // Step 4 replaces this with the Claude API call.
+  function showCapturePreview(cap, kind) {
+    $('#captureImg').src = `data:${cap.mediaType};base64,${cap.base64}`;
+    const kb = Math.round((cap.base64.length * 3) / 4 / 1024);
+    $('#captureInfo').textContent = `${kind === 'math' ? 'Solve Math' : 'Clean Diagram'} · ${cap.width}×${cap.height}px · ${kb} KB`;
+    $('#capturePreview').hidden = false;
+  }
+
   // ---------- Replay ----------
   //
   // A replay turns timeline() into steps on a replay clock (ms). Each step goes from one board
@@ -874,6 +1031,8 @@
 
     current = null;
     drag = null;
+    lasso = null;
+    lassoSelection = [];
     activePointer = null;
     selectedId = null;
     replay = { ...buildReplay(), time: 0, playing: false, last: 0, raf: 0, recording: null };
@@ -1027,6 +1186,10 @@
       selectedId = null;
       scheduleRender();
     }
+    if (tool !== 'lasso' && lassoSelection.length) {
+      lassoSelection = [];
+      scheduleRender();
+    }
     state.tool = tool;
     board.dataset.tool = tool;
     document.querySelectorAll('[data-tool]').forEach((b) => {
@@ -1133,14 +1296,94 @@
     if (replay) updateReplayUI();
   });
 
+  $('#lassoMenu').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-convert]');
+    const sel = liveLassoSelection();
+    if (!btn || !sel.length) return;
+    showCapturePreview(captureSelection(sel), btn.dataset.convert);
+  });
+  $('#capturePreviewClose').addEventListener('click', () => { $('#capturePreview').hidden = true; });
+
+  // ---------- Settings (Anthropic API key) ----------
+  // The key is stored only in this browser's localStorage, under its own entry (never in the
+  // board save), and is read only when a conversion is requested.
+
+  function getApiKey() {
+    try {
+      return localStorage.getItem(API_KEY_STORAGE) || '';
+    } catch {
+      return '';
+    }
+  }
+
+  function setApiKey(key) {
+    try {
+      if (key) localStorage.setItem(API_KEY_STORAGE, key);
+      else localStorage.removeItem(API_KEY_STORAGE);
+      return true;
+    } catch {
+      toast("Couldn't save the key — browser storage is unavailable");
+      return false;
+    }
+  }
+
+  const settingsModal = $('#settingsModal');
+  const apiKeyInput = $('#apiKeyInput');
+
+  function openSettings() {
+    const key = getApiKey();
+    apiKeyInput.value = '';
+    $('#apiKeyStatus').textContent = key
+      ? `A key is saved (ending in …${key.slice(-4)}). Paste a new one to replace it.`
+      : 'No key saved yet.';
+    $('#apiKeyRemove').hidden = !key;
+    settingsModal.hidden = false;
+    apiKeyInput.focus();
+  }
+
+  function closeSettings() {
+    settingsModal.hidden = true;
+  }
+
+  $('#settingsBtn').addEventListener('click', openSettings);
+  $('#settingsCancel').addEventListener('click', closeSettings);
+  settingsModal.addEventListener('click', (e) => { if (e.target === settingsModal) closeSettings(); });
+  settingsModal.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSettings(); });
+
+  $('#settingsForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const key = apiKeyInput.value.trim();
+    if (!key) {
+      if (getApiKey()) closeSettings();  // nothing new pasted: keep the saved key
+      else toast('Paste your API key first');
+      return;
+    }
+    if (!key.startsWith('sk-ant-')) {
+      toast("That doesn't look like an Anthropic API key — it should start with sk-ant-");
+      return;
+    }
+    if (setApiKey(key)) {
+      closeSettings();
+      toast('API key saved in this browser');
+    }
+  });
+
+  $('#apiKeyRemove').addEventListener('click', () => {
+    if (setApiKey('')) {
+      closeSettings();
+      toast('API key removed from this browser');
+    }
+  });
+
   const help = $('#help');
   $('#helpBtn').addEventListener('click', () => { help.hidden = !help.hidden; });
 
   // ---------- Keyboard ----------
 
-  const TOOL_KEYS = { v: 'select', h: 'hand', p: 'pen', m: 'highlighter', e: 'eraser', l: 'line', a: 'arrow', r: 'rect', o: 'ellipse', t: 'text' };
+  const TOOL_KEYS = { v: 'select', k: 'lasso', h: 'hand', p: 'pen', m: 'highlighter', e: 'eraser', l: 'line', a: 'arrow', r: 'rect', o: 'ellipse', t: 'text' };
 
   window.addEventListener('keydown', (e) => {
+    if (!settingsModal.hidden) return;  // the dialog handles its own keys (Esc closes it)
     if (e.target instanceof Element && e.target.matches('input, textarea')) return;
     const key = e.key.toLowerCase();
     const mod = e.ctrlKey || e.metaKey;
@@ -1162,8 +1405,9 @@
       return;
     }
     if (e.key === 'Escape') {
-      if (current || drag) { current = null; drag = null; activePointer = null; }
+      if (current || drag || lasso) { current = null; drag = null; lasso = null; activePointer = null; }
       selectedId = null;
+      lassoSelection = [];
       scheduleRender();
       help.hidden = true;
       return;

@@ -44,6 +44,7 @@ html, body {
 
 #board[data-tool="text"] { cursor: text; }
 #board[data-tool="select"] { cursor: default; }
+#board[data-tool="lasso"] { cursor: crosshair; }
 #board[data-tool="hand"],
 #board.space { cursor: grab; }
 #board.grabbing { cursor: grabbing; }
@@ -325,6 +326,111 @@ html, body {
 @media (max-width: 960px) {
   .replay-bar { bottom: 64px; }
 }
+
+/* ---------- Lasso menu & capture preview ---------- */
+
+.help-wrap { gap: 2px; }
+
+.lasso-menu {
+  z-index: 12;
+  gap: 4px;
+  padding: 4px;
+}
+
+.menu-btn,
+.text-btn {
+  height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font: 500 13px var(--font);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.menu-btn:hover,
+.text-btn:hover { background: var(--hover); }
+.menu-btn:focus-visible,
+.text-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.capture-preview {
+  z-index: 12;
+  right: 12px;
+  top: 72px;
+  flex-direction: column;
+  align-items: stretch;
+  width: min(360px, calc(100vw - 24px));
+  padding: 4px 4px 8px;
+}
+
+.capture-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-left: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+#captureImg {
+  display: block;
+  max-height: 50vh;
+  margin: 0 4px;
+  object-fit: contain;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+/* ---------- Settings modal ---------- */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(16, 24, 40, 0.35);
+}
+
+.modal {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(420px, 100%);
+  padding: 18px 20px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.modal h2 { margin: 0 0 4px; font-size: 16px; }
+.modal label { font-size: 13px; font-weight: 500; }
+
+.modal input {
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font: 13px ui-monospace, "Cascadia Code", Consolas, monospace;
+  color: var(--text);
+  background: var(--panel);
+}
+
+.modal input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+.modal-note { margin: 0; font-size: 12px; line-height: 1.5; color: var(--muted); }
+
+.modal-actions { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+.modal-actions .spacer { flex: 1; }
+.text-btn.primary { background: var(--accent); color: #fff; }
+.text-btn.primary:hover { background: #4338ca; }
+#apiKeyRemove { color: #c92a2a; padding: 0 8px; }
 
 /* ---------- Toast ---------- */
 
