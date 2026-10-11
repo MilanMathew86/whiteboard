@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Privacy — ChalkBack</title>
+  <style>
+    /* Same palette and type as the app (style.css), adapted for a scrolling text page. */
+    :root {
+      --bg: #f7f8fa;
+      --dot: #cdd2da;
+      --panel: #ffffff;
+      --border: #e3e6eb;
+      --text: #1f2328;
+      --muted: #6b7280;
+      --accent: #4f46e5;
+      --accent-soft: #eef0ff;
+      --shadow: 0 4px 18px rgba(16, 24, 40, 0.08), 0 1px 3px rgba(16, 24, 40, 0.06);
+      --font: system-ui, "Segoe UI", Roboto, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      padding: 40px 16px 64px;
+      font-family: var(--font);
+      font-size: 15px;
+      line-height: 1.6;
+      color: var(--text);
+      background-color: var(--bg);
+      background-image: radial-gradient(var(--dot) 1px, transparent 1.5px);
+      background-size: 24px 24px;
+    }
+
+    main {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 32px 36px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+    }
+
+    .back {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 20px;
+      padding: 6px 10px 6px 6px;
+      border-radius: 8px;
+      color: var(--accent);
+      font-weight: 500;
+      font-size: 14px;
+      text-decoration: none;
+    }
+
+    .back:hover { background: var(--accent-soft); }
+
+    .back svg {
+      width: 18px;
+      height: 18px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    h1 { margin: 0 0 4px; font-size: 26px; line-height: 1.25; }
+    .updated { margin: 0 0 24px; color: var(--muted); font-size: 13px; }
+    h2 { margin: 28px 0 8px; font-size: 17px; }
+    p, ul { margin: 0 0 12px; }
+    ul { padding-left: 20px; }
+    li { margin-bottom: 6px; }
+    a { color: var(--accent); }
+    code {
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: var(--accent-soft);
+      font: 13px ui-monospace, "Cascadia Code", Consolas, monospace;
+    }
+
+    .summary {
+      margin: 0 0 8px;
+      padding: 14px 18px;
+      border-radius: 10px;
+      background: var(--accent-soft);
+    }
+
+    .summary ul { margin: 0; }
+    .summary li:last-child { margin-bottom: 0; }
+
+    @media (max-width: 560px) {
+      body { padding: 16px 12px 40px; }
+      main { padding: 20px 18px; }
+      h1 { font-size: 22px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <a class="back" href="./">
+      <svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg>
+      Back to ChalkBack
+    </a>
+
+    <h1>Privacy</h1>
+    <p class="updated">Last updated: October 11, 2026</p>
+
+    <div class="summary">
+      <ul>
+        <li>ChalkBack runs entirely in your browser. There is no ChalkBack server, account or database.</li>
+        <li>Your drawings are stored on your device, and in your own Google Drive only if you choose to save them there.</li>
+        <li>Google Drive access is limited to the files ChalkBack creates or that you pick yourself.</li>
+        <li>A Claude API key, if you add one, stays in your browser.</li>
+        <li>No analytics, no advertising, no tracking.</li>
+      </ul>
+    </div>
+
+    <h2>The app runs in your browser</h2>
+    <p>
+      ChalkBack is a set of static files (HTML, CSS and JavaScript) served by GitHub Pages. Everything you do,
+      including drawing, undo, replay and PDF export, happens on your own device. We don't operate any server
+      that receives, stores or processes your drawings or personal information.
+    </p>
+
+    <h2>What's stored on your device</h2>
+    <p>ChalkBack uses your browser's local storage (<code>localStorage</code>) for:</p>
+    <ul>
+      <li><strong>Your board</strong>: your drawings, images you add, the view position, and the undo/replay
+        history with the time of each action, so your work survives a page refresh.</li>
+      <li><strong>Your Claude API key</strong>, if you add one (see below).</li>
+    </ul>
+    <p>
+      This data never leaves your device unless you save to Google Drive or use a Claude feature. You can
+      delete it at any time by clearing this site's data in your browser settings.
+    </p>
+
+    <h2>Google Drive</h2>
+    <p>
+      Saving to and opening from Google Drive is optional. When you use it, you sign in with Google and grant
+      ChalkBack the <code>drive.file</code> permission. That permission only lets ChalkBack access:
+    </p>
+    <ul>
+      <li>files that ChalkBack itself created in your Drive, and</li>
+      <li>files you explicitly choose in the Google file picker.</li>
+    </ul>
+    <p>
+      ChalkBack cannot see, list, read or change any other files in your Drive. It does not access your
+      name, email address, contacts or any other Google account data.
+    </p>
+    <p>
+      The sign-in token Google issues is kept only in the page's memory while it's open, and is discarded when
+      you close or reload the page. Files are sent directly between your browser and Google; they never pass
+      through any ChalkBack server. You can remove ChalkBack's access at any time from your
+      <a href="https://myaccount.google.com/connections" target="_blank" rel="noopener">Google Account
+      connections</a> page.
+    </p>
+    <p>
+      ChalkBack's use and transfer of information received from Google APIs adheres to the
+      <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noopener">Google
+      API Services User Data Policy</a>, including the Limited Use requirements.
+    </p>
+
+    <h2>Claude API key</h2>
+    <p>
+      ChalkBack's AI features (Solve Math and Clean Diagram) use your own Anthropic API key, which you can
+      add in Settings. The key is stored only in your browser's local storage. It is never included in your
+      board, your exports or your Drive files, and it is never sent anywhere except directly to Anthropic's
+      API (<code>api.anthropic.com</code>).
+    </p>
+    <p>
+      When you use one of these features, your browser sends an image of only the strokes you selected,
+      together with your key, straight to Anthropic. Anthropic handles that request under its own
+      <a href="https://www.anthropic.com/legal/privacy" target="_blank" rel="noopener">privacy policy</a>.
+      You can remove the key at any time with <strong>Remove key</strong> in Settings.
+    </p>
+    <p>
+      Anyone with access to your browser profile could read a stored key, so don't add one on a shared
+      computer.
+    </p>
+
+    <h2>Third-party services</h2>
+    <p>
+      To provide its features, ChalkBack's pages load code from a few outside services. Like any website,
+      these services receive standard request details such as your IP address and browser type:
+    </p>
+    <ul>
+      <li><strong>GitHub Pages</strong> hosts ChalkBack's files
+        (<a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement" target="_blank" rel="noopener">GitHub privacy statement</a>).</li>
+      <li><strong>Google</strong> provides sign-in, the file picker and Drive storage
+        (<a href="https://policies.google.com/privacy" target="_blank" rel="noopener">Google privacy policy</a>).</li>
+      <li><strong>cdnjs (Cloudflare)</strong> serves the jsPDF library used for PDF export
+        (<a href="https://www.cloudflare.com/privacypolicy/" target="_blank" rel="noopener">Cloudflare privacy policy</a>).</li>
+      <li><strong>Anthropic</strong>, only when you use a Claude feature with your own key, as described above.</li>
+    </ul>
+    <p>ChalkBack itself sets no cookies and uses no analytics or advertising services.</p>
+
+    <h2>Children</h2>
+    <p>ChalkBack doesn't knowingly collect any personal information from anyone, including children.</p>
+
+    <h2>Changes</h2>
+    <p>
+      If this policy changes, the updated version will be posted on this page with a new “Last updated”
+      date.
+    </p>
+
+    <h2>Contact</h2>
+    <p>
+      Questions about privacy? Open an issue on
+      <a href="https://github.com/MilanMathew86/whiteboard/issues" target="_blank" rel="noopener">ChalkBack's GitHub page</a>.
+    </p>
+  </main>
+</body>
+</html>
