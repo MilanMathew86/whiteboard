@@ -1,6 +1,18 @@
 (() => {
   'use strict';
 
+  // Google Drive save/load — the only place these settings live. From a Google Cloud project
+  // with the Drive API and Google Picker API enabled:
+  //   clientId: OAuth 2.0 Client ID (type "Web application") with this site's origin authorised
+  //   apiKey:   an API key (restrict it to the Picker API and this site); the Picker requires one
+  //   appId:    the project number, so files chosen in the Picker are opened up to this app
+  // Leave clientId empty to keep Drive turned off (no Google scripts are loaded).
+  const GOOGLE_CONFIG = {
+    clientId: '',
+    apiKey: '',
+    appId: '',
+  };
+
   const FONT = 'system-ui, "Segoe UI", Roboto, sans-serif';
   const LINE_HEIGHT = 1.25;
   const STORAGE_KEY = 'whiteboard.v1';
@@ -386,18 +398,34 @@
     redoStack = (data.redo || []).map(entry);
   }
 
+  // Replace the board and its history with saved data (autosave or a Drive file). Throws, and
+  // leaves the board untouched, if the data isn't a whiteboard save.
+  function applyBoardData(data) {
+    const prev = { shapes, undoStack, redoStack };
+    try {
+      if (data && data.v === 2 && Array.isArray(data.shapes) && Array.isArray(data.pool)) {
+        deserialize(data);
+      } else if (data && Array.isArray(data.shapes)) {
+        // v1: board only, no history
+        shapes = data.shapes;
+        undoStack = [];
+        redoStack = [];
+      } else {
+        throw new Error('not a whiteboard save');
+      }
+      if (shapes.some((s) => !s || typeof s.type !== 'string')) throw new Error('not a whiteboard save');
+    } catch (err) {
+      ({ shapes, undoStack, redoStack } = prev);
+      throw err;
+    }
+    if (data.view && data.view.scale) view = data.view;
+  }
+
   function load() {
     try {
       const data = JSON.parse(localStorage.getItem(STORAGE_KEY));
-      if (!data) return;
-      if (data.v === 2) deserialize(data);
-      else if (Array.isArray(data.shapes)) shapes = data.shapes;  // v1: board only, no history
-      if (data.view && data.view.scale) view = data.view;
-    } catch {
-      shapes = [];
-      undoStack = [];
-      redoStack = [];
-    }
+      if (data) applyBoardData(data);
+    } catch { /* start with an empty board */ }
   }
 
   // The board's history as a timestamped list of states, oldest first. The first entry is
@@ -719,9 +747,11 @@
     return box;
   }
 
-  function exportPNG() {
+  // Render the drawn content, cropped to its bounds plus padding, onto a white canvas.
+  // Returns { canvas, width, height } with width/height in board units, or null if empty.
+  function renderContent() {
     const box = unionBounds(shapes);
-    if (!box) { toast('Nothing to export yet'); return; }
+    if (!box) return null;
     const [minX, minY, maxX, maxY] = box;
 
     const pad = 32;
@@ -744,13 +774,32 @@
     oc.fillStyle = '#ffffff';
     oc.fillRect(0, 0, out.width, out.height);
     oc.drawImage(layer, 0, 0);
+    return { canvas: out, width: w, height: h };
+  }
 
-    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
-    const a = document.createElement('a');
-    a.download = `whiteboard-${stamp}.png`;
-    a.href = out.toDataURL('image/png');
-    a.click();
-    toast('Exported PNG');
+  const fileStamp = () => new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+
+  // PDF export: an A4 page turned to match the content's shape (landscape when wider than
+  // tall), with the content scaled to fit inside the margins and centred. jsPDF comes from
+  // the CDN script in index.html.
+  function exportPDF() {
+    const jsPDF = window.jspdf && window.jspdf.jsPDF;
+    if (!jsPDF) { toast("The PDF library hasn't loaded — check your connection and try again"); return; }
+    const content = renderContent();
+    if (!content) { toast('Nothing to export yet'); return; }
+
+    const orientation = content.width >= content.height ? 'landscape' : 'portrait';
+    const pdf = new jsPDF({ orientation, unit: 'pt', format: 'a4' });
+    const pageW = pdf.internal.pageSize.getWidth();
+    const pageH = pdf.internal.pageSize.getHeight();
+    const margin = 36;  // pt (half an inch)
+    // Shrink to fit, but don't blow small drawings up past their on-screen size (1px = 0.75pt).
+    const k = Math.min((pageW - 2 * margin) / content.width, (pageH - 2 * margin) / content.height, 0.75);
+    const w = content.width * k;
+    const h = content.height * k;
+    pdf.addImage(content.canvas, 'PNG', (pageW - w) / 2, (pageH - h) / 2, w, h, undefined, 'FAST');
+    pdf.save(`whiteboard-${fileStamp()}.pdf`);
+    toast('Exported PDF');
   }
 
   // ---------- Images ----------
@@ -1251,7 +1300,7 @@
   $('#undo').addEventListener('click', undo);
   $('#redo').addEventListener('click', redo);
   $('#clear').addEventListener('click', clearBoard);
-  $('#export').addEventListener('click', exportPNG);
+  $('#export').addEventListener('click', exportPDF);
   $('#zoomIn').addEventListener('click', () => zoomCenter(1.2));
   $('#zoomOut').addEventListener('click', () => zoomCenter(1 / 1.2));
   $('#zoomPct').addEventListener('click', resetView);
@@ -1303,6 +1352,180 @@
     showCapturePreview(captureSelection(sel), btn.dataset.convert);
   });
   $('#capturePreviewClose').addEventListener('click', () => { $('#capturePreview').hidden = true; });
+
+  // ---------- Google Drive ----------
+  // Sign-in uses Google Identity Services (token model) with the drive.file scope, so the app
+  // only ever sees files it created or that the user picks in the Google Picker. A save is the
+  // same JSON as the autosave: the board plus its undo/replay history.
+
+  const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
+  const DRIVE_NOT_SET_UP = "Google Drive isn't set up — add your Google IDs to GOOGLE_CONFIG in app.js";
+  let tokenClient = null;
+  let pendingAuth = null;   // { resolve, reject } for the sign-in in progress
+  let googleToken = null;   // { value, expiresAt }
+  let driveFile = null;     // { id, name } of the file this board was opened from or saved to
+
+  function loadScript(src) {
+    return new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = src;
+      s.async = true;
+      s.onload = resolve;
+      s.onerror = () => reject(new Error(`Couldn't load ${src}`));
+      document.head.appendChild(s);
+    });
+  }
+
+  // Load Google's scripts at startup (only when configured), so a button click can open the
+  // sign-in popup immediately; browsers block popups opened after waiting on a download.
+  if (GOOGLE_CONFIG.clientId) {
+    loadScript('https://accounts.google.com/gsi/client').then(() => {
+      tokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: GOOGLE_CONFIG.clientId,
+        scope: DRIVE_SCOPE,
+        callback: (resp) => {
+          const auth = pendingAuth;
+          pendingAuth = null;
+          if (!auth) return;
+          if (resp.error) { auth.reject(new Error('Google sign-in failed')); return; }
+          googleToken = { value: resp.access_token, expiresAt: Date.now() + (resp.expires_in - 60) * 1000 };
+          toast('Signed in to Google');
+          auth.resolve(googleToken.value);
+        },
+        error_callback: (err) => {
+          const auth = pendingAuth;
+          pendingAuth = null;
+          if (auth) auth.reject(new Error(err.type === 'popup_closed' ? 'Google sign-in was cancelled' : 'Google sign-in failed'));
+        },
+      });
+    }).catch(() => { /* reported when a Drive button is used */ });
+    loadScript('https://apis.google.com/js/api.js')
+      .then(() => gapi.load('picker', () => {}))
+      .catch(() => {});
+  }
+
+  // Resolve with an access token, signing in first if needed. Call it straight from the click
+  // handler (before any await) so the sign-in popup counts as user-initiated.
+  function getGoogleToken() {
+    if (googleToken && Date.now() < googleToken.expiresAt) return Promise.resolve(googleToken.value);
+    if (!tokenClient) return Promise.reject(new Error("Google sign-in isn't ready — check your connection and try again"));
+    return new Promise((resolve, reject) => {
+      pendingAuth = { resolve, reject };
+      toast('Signing in to Google…');
+      tokenClient.requestAccessToken({ prompt: '' });
+    });
+  }
+
+  async function driveJson(res) {
+    if (res.status === 401) {
+      googleToken = null;
+      throw new Error('Your Google sign-in expired — please try again');
+    }
+    if (!res.ok) throw new Error(`Google Drive returned an error (${res.status})`);
+    return res.json();
+  }
+
+  async function driveCreate(token, body) {
+    const form = new FormData();
+    const metadata = { name: `whiteboard-${fileStamp()}.json`, mimeType: 'application/json' };
+    form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+    form.append('file', new Blob([body], { type: 'application/json' }));
+    const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: form,
+    });
+    return driveJson(res);
+  }
+
+  // Overwrite a file's contents; resolves null if it's gone (deleted, or access removed).
+  async function driveUpdate(token, id, body) {
+    const res = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(id)}?uploadType=media&fields=id,name`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body,
+    });
+    if (res.status === 404 || res.status === 403) return null;
+    return driveJson(res);
+  }
+
+  function driveErrorMessage(err) {
+    if (err instanceof TypeError) return "Couldn't reach Google Drive — check your connection";
+    if (err instanceof SyntaxError) return "That file isn't a whiteboard save";
+    return err.message;
+  }
+
+  // Save: update the Drive file this board came from (or was last saved to), else create one.
+  async function saveToDrive() {
+    if (!GOOGLE_CONFIG.clientId) { toast(DRIVE_NOT_SET_UP); return; }
+    if (textEditor) textEditor.blur();
+    try {
+      const token = await getGoogleToken();
+      const body = JSON.stringify(serialize(true));
+      const file = (driveFile && await driveUpdate(token, driveFile.id, body)) || await driveCreate(token, body);
+      driveFile = { id: file.id, name: file.name };
+      toast(`Saved to Google Drive as “${file.name}”`);
+    } catch (err) {
+      toast(driveErrorMessage(err));
+    }
+  }
+
+  // Resolves with the picked { id, name }, or null if the Picker was closed.
+  function pickDriveFile(token) {
+    return new Promise((resolve, reject) => {
+      if (!window.google || !google.picker) {
+        reject(new Error("Google Picker isn't ready — check your connection and try again"));
+        return;
+      }
+      const view = new google.picker.DocsView(google.picker.ViewId.DOCS).setMimeTypes('application/json');
+      new google.picker.PickerBuilder()
+        .addView(view)
+        .setTitle('Open a whiteboard')
+        .setOAuthToken(token)
+        .setDeveloperKey(GOOGLE_CONFIG.apiKey)
+        .setAppId(GOOGLE_CONFIG.appId)
+        .setCallback((data) => {
+          if (data.action === google.picker.Action.PICKED) resolve({ id: data.docs[0].id, name: data.docs[0].name });
+          else if (data.action === google.picker.Action.CANCEL) resolve(null);
+        })
+        .build()
+        .setVisible(true);
+    });
+  }
+
+  async function openFromDrive() {
+    if (!GOOGLE_CONFIG.clientId || !GOOGLE_CONFIG.apiKey || !GOOGLE_CONFIG.appId) { toast(DRIVE_NOT_SET_UP); return; }
+    if (textEditor) textEditor.blur();
+    try {
+      const token = await getGoogleToken();
+      const picked = await pickDriveFile(token);
+      if (!picked) return;
+      const res = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(picked.id)}?alt=media`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await driveJson(res);
+      if (shapes.length && !confirm(`Replace the current board with “${picked.name}”? Its undo history will be replaced too.`)) return;
+      try {
+        applyBoardData(data);
+      } catch {
+        throw new SyntaxError('not a whiteboard save');
+      }
+      current = null;
+      drag = null;
+      lassoSelection = [];
+      selectedId = null;
+      driveFile = picked;
+      updateHistoryButtons();
+      scheduleRender();
+      scheduleSave();
+      toast(`Loaded “${picked.name}” from Google Drive`);
+    } catch (err) {
+      toast(driveErrorMessage(err));
+    }
+  }
+
+  $('#driveSave').addEventListener('click', saveToDrive);
+  $('#driveOpen').addEventListener('click', openFromDrive);
 
   // ---------- Settings (Anthropic API key) ----------
   // The key is stored only in this browser's localStorage, under its own entry (never in the
@@ -1396,7 +1619,7 @@
 
     if (mod && key === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
     if (mod && key === 'y') { e.preventDefault(); redo(); return; }
-    if (mod && key === 's') { e.preventDefault(); exportPNG(); return; }
+    if (mod && key === 's') { e.preventDefault(); exportPDF(); return; }
     if (mod || e.altKey) return;
 
     if (e.key === ' ') {

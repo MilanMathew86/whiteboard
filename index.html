@@ -90,8 +90,14 @@
       <button class="btn" id="clear" title="Clear board">
         <svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
       </button>
-      <button class="btn" id="export" title="Export as PNG (Ctrl+S)">
+      <button class="btn" id="export" title="Export as PDF (Ctrl+S)">
         <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></svg>
+      </button>
+      <button class="btn" id="driveSave" title="Save to Google Drive">
+        <svg viewBox="0 0 24 24"><path d="M12 13v8"/><path d="M4 14.9A7 7 0 1 1 15.7 8h1.8a4.5 4.5 0 0 1 2.5 8.2"/><path d="m8 17 4-4 4 4"/></svg>
+      </button>
+      <button class="btn" id="driveOpen" title="Open from Google Drive">
+        <svg viewBox="0 0 24 24"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.2 10H20a2 2 0 0 1 1.9 2.5l-1.5 6a2 2 0 0 1-1.9 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.7.9l.8 1.2a2 2 0 0 0 1.7.9H18a2 2 0 0 1 2 2v2"/></svg>
       </button>
     </div>
 
@@ -200,13 +206,17 @@
       <dt>+ / − / 0</dt><dd>Zoom in / out / reset</dd>
       <dt>Ctrl+Z</dt><dd>Undo</dd>
       <dt>Ctrl+Y</dt><dd>Redo</dd>
-      <dt>Ctrl+S</dt><dd>Export PNG</dd>
+      <dt>Ctrl+S</dt><dd>Export PDF</dd>
       <dt>Esc</dt><dd>Close replay</dd>
     </dl>
   </div>
 
   <div class="toast" id="toast" role="status"></div>
 
+  <!-- jsPDF for PDF export; deferred because it's only needed when exporting. -->
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/4.2.1/jspdf.umd.min.js"
+    integrity="sha512-plOdviVmws4Y3JAvbnpfKb2hVxKM1lCwsi3vmElYRj+tiDLffZ4FVUj5a8vyKJ9pIgl8JCAHEJ4D1iUKBecswg=="
+    crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <script src="app.js"></script>
 </body>
 </html>
