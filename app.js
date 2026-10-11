@@ -8,9 +8,9 @@
   //   appId:    the project number, so files chosen in the Picker are opened up to this app
   // Leave clientId empty to keep Drive turned off (no Google scripts are loaded).
   const GOOGLE_CONFIG = {
-    clientId: '',
-    apiKey: '',
-    appId: '',
+    clientId: '65282310191-i4bmb3drctvklctaqh6pvn1i58onq9ug.apps.googleusercontent.com',
+    apiKey: 'AIzaSyAak6ZUlV_Amh8E_xPF1i-S8JbmYWOjZSE',
+    appId: '65282310191',
   };
 
   const FONT = 'system-ui, "Segoe UI", Roboto, sans-serif';
@@ -1388,6 +1388,12 @@
           pendingAuth = null;
           if (!auth) return;
           if (resp.error) { auth.reject(new Error('Google sign-in failed')); return; }
+          // Google's consent screen lets people untick individual permissions; without Drive
+          // access every request would fail, so say so plainly instead.
+          if (!google.accounts.oauth2.hasGrantedAllScopes(resp, DRIVE_SCOPE)) {
+            auth.reject(new Error('Google Drive access wasn’t allowed — sign in again and tick the Drive permission'));
+            return;
+          }
           googleToken = { value: resp.access_token, expiresAt: Date.now() + (resp.expires_in - 60) * 1000 };
           toast('Signed in to Google');
           auth.resolve(googleToken.value);
@@ -1395,7 +1401,12 @@
         error_callback: (err) => {
           const auth = pendingAuth;
           pendingAuth = null;
-          if (auth) auth.reject(new Error(err.type === 'popup_closed' ? 'Google sign-in was cancelled' : 'Google sign-in failed'));
+          if (!auth) return;
+          const messages = {
+            popup_closed: 'Google sign-in was cancelled',
+            popup_failed_to_open: 'The Google sign-in window was blocked — allow pop-ups for this site and try again',
+          };
+          auth.reject(new Error(messages[err.type] || 'Google sign-in failed'));
         },
       });
     }).catch(() => { /* reported when a Drive button is used */ });
@@ -1438,15 +1449,17 @@
     return driveJson(res);
   }
 
-  // Overwrite a file's contents; resolves null if it's gone (deleted, or access removed).
+  // Overwrite a file's contents; resolves null if it's gone (deleted, trashed, or access
+  // removed) so the caller saves a new file instead.
   async function driveUpdate(token, id, body) {
-    const res = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(id)}?uploadType=media&fields=id,name`, {
+    const res = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(id)}?uploadType=media&fields=id,name,trashed`, {
       method: 'PATCH',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body,
     });
     if (res.status === 404 || res.status === 403) return null;
-    return driveJson(res);
+    const file = await driveJson(res);
+    return file.trashed ? null : file;  // don't keep saving into a file sitting in the bin
   }
 
   function driveErrorMessage(err) {
