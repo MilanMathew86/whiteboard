@@ -2,6 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <!-- A text-only page: no scripts, no outside resources. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; form-action 'none'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Privacy — ChalkBack</title>
   <style>
@@ -114,7 +116,9 @@
         <li>ChalkBack runs entirely in your browser. There is no ChalkBack server, account or database.</li>
         <li>Your drawings are stored on your device, and in your own Google Drive only if you choose to save them there.</li>
         <li>Google Drive access is limited to the files ChalkBack creates or that you pick yourself.</li>
-        <li>A Claude API key, if you add one, stays in your browser.</li>
+        <li>AI features are optional. When you use one, only the strokes you selected are sent to Anthropic for processing, and you're told so first.</li>
+        <li>A Claude API key, if you add one, stays in your browser: for the current tab only, unless you choose to remember it.</li>
+        <li>You can clear everything ChalkBack stores in your browser from Settings at any time.</li>
         <li>No analytics, no advertising, no tracking.</li>
       </ul>
     </div>
@@ -127,15 +131,21 @@
     </p>
 
     <h2>What's stored on your device</h2>
-    <p>ChalkBack uses your browser's local storage (<code>localStorage</code>) for:</p>
+    <p>ChalkBack keeps the following in your browser's storage:</p>
     <ul>
-      <li><strong>Your board</strong>: your drawings, images you add, the view position, and the undo/replay
-        history with the time of each action, so your work survives a page refresh.</li>
-      <li><strong>Your Claude API key</strong>, if you add one (see below).</li>
+      <li><strong>Your board</strong> (<code>localStorage</code>): your drawings, images you add, the view
+        position, and the undo/replay history with the time of each action, so your work survives a page
+        refresh.</li>
+      <li><strong>Your Claude API key</strong>, if you add one: in <code>sessionStorage</code> by default,
+        which your browser deletes when you close the tab, or in <code>localStorage</code> if you tick
+        <strong>Remember key on this device</strong> (see below).</li>
+      <li><strong>Whether you've seen the AI notice</strong> (<code>localStorage</code>), so it's only shown
+        once.</li>
     </ul>
     <p>
-      This data never leaves your device unless you save to Google Drive or use a Claude feature. You can
-      delete it at any time by clearing this site's data in your browser settings.
+      This data never leaves your device unless you save to Google Drive or use an AI feature. To delete it,
+      open <strong>Settings</strong> and choose <strong>Clear local data</strong>, or clear this site's data in
+      your browser settings. Clearing local data doesn't affect files you saved to Google Drive.
     </p>
 
     <h2>Google Drive</h2>
@@ -154,7 +164,8 @@
     <p>
       The sign-in token Google issues is kept only in the page's memory while it's open, and is discarded when
       you close or reload the page. Files are sent directly between your browser and Google; they never pass
-      through any ChalkBack server. You can remove ChalkBack's access at any time from your
+      through any ChalkBack server. <strong>Sign out of Drive</strong> in Settings revokes the token with
+      Google straight away. You can also remove ChalkBack's access at any time from your
       <a href="https://myaccount.google.com/connections" target="_blank" rel="noopener">Google Account
       connections</a> page.
     </p>
@@ -164,22 +175,33 @@
       API Services User Data Policy</a>, including the Limited Use requirements.
     </p>
 
+    <h2>AI processing (Claude)</h2>
+    <p>
+      ChalkBack's AI features, Solve Math and Clean Diagram, are optional and use Anthropic's Claude. When
+      you use one, your browser renders <strong>only the strokes you selected</strong> as an image and sends
+      it, with your API key, straight to Anthropic's API (<code>api.anthropic.com</code>) for processing.
+      Nothing else on your board is sent, and nothing passes through a ChalkBack server. The first time you
+      use an AI feature, ChalkBack shows a notice saying that your selected drawing is sent to Anthropic, and
+      nothing is sent unless you continue.
+    </p>
+    <p>
+      Anthropic processes these requests under its own
+      <a href="https://www.anthropic.com/legal/privacy" target="_blank" rel="noopener">privacy policy</a> and
+      the terms of your API account.
+    </p>
+
     <h2>Claude API key</h2>
     <p>
-      ChalkBack's AI features (Solve Math and Clean Diagram) use your own Anthropic API key, which you can
-      add in Settings. The key is stored only in your browser's local storage. It is never included in your
-      board, your exports or your Drive files, and it is never sent anywhere except directly to Anthropic's
-      API (<code>api.anthropic.com</code>).
+      AI features use your own Anthropic API key, which you add in Settings. By default the key is kept in
+      <code>sessionStorage</code> and is deleted when you close the tab. If you tick
+      <strong>Remember key on this device</strong>, it's kept in <code>localStorage</code> until you choose
+      <strong>Forget key</strong> or <strong>Clear local data</strong>. The key is never included in your
+      board, your exports or your Drive files, and it's never sent anywhere except directly to
+      <code>api.anthropic.com</code>.
     </p>
     <p>
-      When you use one of these features, your browser sends an image of only the strokes you selected,
-      together with your key, straight to Anthropic. Anthropic handles that request under its own
-      <a href="https://www.anthropic.com/legal/privacy" target="_blank" rel="noopener">privacy policy</a>.
-      You can remove the key at any time with <strong>Remove key</strong> in Settings.
-    </p>
-    <p>
-      Anyone with access to your browser profile could read a stored key, so don't add one on a shared
-      computer.
+      Anyone with access to your browser profile could read a stored key, so don't remember a key on a shared
+      computer, and consider using a dedicated key with a spending limit.
     </p>
 
     <h2>Third-party services</h2>
@@ -197,6 +219,14 @@
       <li><strong>Anthropic</strong>, only when you use a Claude feature with your own key, as described above.</li>
     </ul>
     <p>ChalkBack itself sets no cookies and uses no analytics or advertising services.</p>
+
+    <h2>Security</h2>
+    <p>
+      ChalkBack's pages use a Content Security Policy that only allows the services listed above. The PDF
+      library is pinned to an exact version and checked against a fixed integrity hash. Boards opened from
+      Google Drive or loaded from your browser are checked strictly before use: anything other than
+      ChalkBack's own board format, including images that point to outside web addresses, is rejected.
+    </p>
 
     <h2>Children</h2>
     <p>ChalkBack doesn't knowingly collect any personal information from anyone, including children.</p>

@@ -2,6 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <!-- Content Security Policy: only the origins the app actually uses.
+       scripts: this site, the pinned jsPDF folder on cdnjs, Google sign-in and the Google API loader (Picker)
+       connect:  Google Drive API, Google sign-in, Anthropic API
+       frames:   Google sign-in and the Google Picker
+       images:   this site, data: images (how board images are stored) and blob: (decoding uploads)
+       styles:   inline styles are allowed because Google's sign-in and Picker scripts inject
+                 <style> blocks (the Picker's dialog lives in this page); scripts stay strict -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com/ajax/libs/jspdf/4.2.1/ https://accounts.google.com/gsi/client https://apis.google.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' https://www.googleapis.com https://accounts.google.com/gsi/ https://api.anthropic.com; frame-src https://accounts.google.com/gsi/ https://docs.google.com; object-src 'none'; base-uri 'self'; form-action 'none'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Whiteboard</title>
   <link rel="stylesheet" href="style.css">
@@ -60,12 +68,12 @@
     <span class="divider"></span>
 
     <div class="group" id="colors">
-      <button class="swatch active" data-color="#1e1e1e" style="--c:#1e1e1e" title="Black"></button>
-      <button class="swatch" data-color="#e03131" style="--c:#e03131" title="Red"></button>
-      <button class="swatch" data-color="#2f9e44" style="--c:#2f9e44" title="Green"></button>
-      <button class="swatch" data-color="#1971c2" style="--c:#1971c2" title="Blue"></button>
-      <button class="swatch" data-color="#f08c00" style="--c:#f08c00" title="Orange"></button>
-      <button class="swatch" data-color="#9c36b5" style="--c:#9c36b5" title="Purple"></button>
+      <button class="swatch active" data-color="#1e1e1e" title="Black"></button>
+      <button class="swatch" data-color="#e03131" title="Red"></button>
+      <button class="swatch" data-color="#2f9e44" title="Green"></button>
+      <button class="swatch" data-color="#1971c2" title="Blue"></button>
+      <button class="swatch" data-color="#f08c00" title="Orange"></button>
+      <button class="swatch" data-color="#9c36b5" title="Purple"></button>
       <label class="swatch custom" title="Custom color">
         <input type="color" id="customColor" value="#0c8599">
       </label>
@@ -169,20 +177,66 @@
   <div class="modal-backdrop" id="settingsModal" hidden>
     <form class="modal" id="settingsForm" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
       <h2 id="settingsTitle">Settings</h2>
-      <label for="apiKeyInput">Anthropic API key</label>
-      <input type="password" id="apiKeyInput" placeholder="sk-ant-..." autocomplete="off" spellcheck="false">
-      <p class="modal-note" id="apiKeyStatus"></p>
-      <p class="modal-note">
-        Your key is saved only in this browser (localStorage) and is sent only to api.anthropic.com
-        when you use Solve Math or Clean Diagram. Anyone with access to this browser profile can read it.
-      </p>
+
+      <section class="modal-section">
+        <h3><label for="apiKeyInput">Claude API key</label></h3>
+        <input type="password" id="apiKeyInput" placeholder="sk-ant-..." autocomplete="off" spellcheck="false">
+        <label class="check"><input type="checkbox" id="rememberKey"> Remember key on this device</label>
+        <p class="modal-note" id="apiKeyStatus"></p>
+        <p class="modal-note">
+          Off: the key is kept only until you close this tab. On: it's saved in this browser until you
+          forget it. Either way it stays on this device and is sent only to api.anthropic.com when you use
+          Solve Math or Clean Diagram.
+        </p>
+        <div class="modal-row">
+          <button type="button" class="text-btn danger" id="apiKeyForget">Forget key</button>
+          <span class="spacer"></span>
+          <button type="submit" class="text-btn primary">Save key</button>
+        </div>
+      </section>
+
+      <section class="modal-section">
+        <h3>Google Drive</h3>
+        <p class="modal-note" id="driveStatus"></p>
+        <div class="modal-row">
+          <button type="button" class="text-btn" id="driveSignOut">Sign out of Drive</button>
+        </div>
+      </section>
+
+      <section class="modal-section">
+        <h3>Local data</h3>
+        <p class="modal-note">
+          Removes the board, its undo/replay history, your API key and preferences from this browser.
+          Files in Google Drive are not affected.
+        </p>
+        <div class="modal-row">
+          <button type="button" class="text-btn danger" id="clearLocalData">Clear local data</button>
+        </div>
+      </section>
+
       <div class="modal-actions">
-        <button type="button" class="text-btn" id="apiKeyRemove">Remove key</button>
+        <a class="modal-link" href="privacy.html" target="_blank" rel="noopener">Privacy</a>
         <span class="spacer"></span>
-        <button type="button" class="text-btn" id="settingsCancel">Cancel</button>
-        <button type="submit" class="text-btn primary">Save</button>
+        <button type="button" class="text-btn" id="settingsCancel">Close</button>
       </div>
     </form>
+  </div>
+
+  <div class="modal-backdrop" id="aiNoticeModal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="aiNoticeTitle">
+      <h2 id="aiNoticeTitle">Before you use AI features</h2>
+      <p>Your selected drawing is sent to Anthropic for processing.</p>
+      <p class="modal-note">
+        Only the strokes you selected are sent, as an image, straight from your browser to Anthropic's API
+        with your API key. Nothing else on your board is sent.
+      </p>
+      <div class="modal-actions">
+        <a class="modal-link" href="privacy.html" target="_blank" rel="noopener">Privacy</a>
+        <span class="spacer"></span>
+        <button type="button" class="text-btn" id="aiNoticeCancel">Cancel</button>
+        <button type="button" class="text-btn primary" id="aiNoticeOk">Continue</button>
+      </div>
+    </div>
   </div>
 
   <div class="help" id="help" hidden>

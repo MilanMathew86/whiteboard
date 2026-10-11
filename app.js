@@ -29,6 +29,7 @@
   const REPLAY_TAIL = 800;        // ms the finished board stays up at the end
   const REPLAY_SHAPE_MS = 300;    // ms a line/arrow/rect/ellipse takes to grow
   const API_KEY_STORAGE = 'whiteboard.anthropicKey';  // kept apart from the board save
+  const AI_NOTICE_STORAGE = 'whiteboard.aiNoticeAccepted';
   const INK = ['pen', 'highlighter'];  // what the lasso selects
   const CAPTURE_PAD = 24;         // px of white around a captured selection
   const CAPTURE_MAX_SIDE = 1568;  // px; long edge of a capture (a good size for Claude's vision)
@@ -385,47 +386,162 @@
     return data;
   }
 
-  function deserialize(data) {
-    const pool = data.pool.map((s) => {
-      if (s.type !== 'image') return s;
-      const { asset, ...rest } = s;
-      return { ...rest, src: data.assets[asset] };
-    });
-    const deref = (ids) => ids.map((i) => pool[i]);
-    const entry = (e) => ({ shapes: deref(e.s), action: e.a, t: e.t });
-    shapes = deref(data.shapes);
-    undoStack = (data.undo || []).map(entry);
-    redoStack = (data.redo || []).map(entry);
+  // ---------- Board validation ----------
+  // Saved boards come from this browser's storage or from Drive files that anyone could have
+  // edited, so they're checked strictly before use: each object may hold only the fields the
+  // app itself writes, with the right types and sane ranges, and image sources must be inline
+  // data: images (an outside URL would make the browser contact that server). The board is
+  // rebuilt from fresh objects; anything unexpected rejects the whole file.
+
+  const ACTIONS = ['stroke', 'erase', 'shape', 'text', 'image', 'move', 'resize', 'delete', 'clear', 'math', 'diagram'];
+  const IMAGE_SRC = /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+={0,2}$/;
+  const MAX_ITEMS = 100000;     // per list: shapes, points, pool entries, images
+  const MAX_TEXT = 10000;       // characters in one text element
+  const MAX_COORD = 1e7;        // board units, far beyond anything drawable
+
+  const invalid = (what) => { throw new Error(`Invalid board data: ${what}`); };
+  const isPlainObject = (o) => o !== null && typeof o === 'object' && Object.getPrototypeOf(o) === Object.prototype;
+
+  function checkFields(o, required, optional, what) {
+    if (!isPlainObject(o)) invalid(what);
+    for (const k of Object.keys(o)) if (!required.includes(k) && !optional.includes(k)) invalid(`${what} has unexpected field "${k}"`);
+    for (const k of required) if (!(k in o)) invalid(`${what} is missing "${k}"`);
   }
 
-  // Replace the board and its history with saved data (autosave or a Drive file). Throws, and
-  // leaves the board untouched, if the data isn't a whiteboard save.
-  function applyBoardData(data) {
-    const prev = { shapes, undoStack, redoStack };
-    try {
-      if (data && data.v === 2 && Array.isArray(data.shapes) && Array.isArray(data.pool)) {
-        deserialize(data);
-      } else if (data && Array.isArray(data.shapes)) {
-        // v1: board only, no history
-        shapes = data.shapes;
-        undoStack = [];
-        redoStack = [];
-      } else {
-        throw new Error('not a whiteboard save');
+  function checkNumber(v, what, min = -MAX_COORD, max = MAX_COORD) {
+    if (typeof v !== 'number' || !Number.isFinite(v) || v < min || v > max) invalid(what);
+    return v;
+  }
+
+  function checkColor(v) {
+    if (typeof v !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(v)) invalid('colour');
+    return v;
+  }
+
+  function checkList(v, what, min = 0) {
+    if (!Array.isArray(v) || v.length < min || v.length > MAX_ITEMS) invalid(what);
+    return v;
+  }
+
+  // `assets` is the v2 image table (images refer to it by index); null for v1 boards, where
+  // images carry their own src.
+  function validateShape(s, assets) {
+    if (!isPlainObject(s)) invalid('item');
+    switch (s.type) {
+      case 'pen':
+      case 'highlighter':
+      case 'eraser':
+        checkFields(s, ['type', 'color', 'size', 'points'], [], 'stroke');
+        return {
+          type: s.type,
+          color: checkColor(s.color),
+          size: checkNumber(s.size, 'stroke size', 0.1, 1000),
+          points: checkList(s.points, 'stroke points', 1).map((p) => {
+            checkFields(p, ['x', 'y'], [], 'point');
+            return { x: checkNumber(p.x, 'point'), y: checkNumber(p.y, 'point') };
+          }),
+        };
+      case 'line':
+      case 'arrow':
+      case 'rect':
+      case 'ellipse': {
+        checkFields(s, ['type', 'color', 'size', 'x1', 'y1', 'x2', 'y2'], ['fill'], 'shape');
+        if ('fill' in s && typeof s.fill !== 'boolean') invalid('shape fill');
+        return {
+          type: s.type,
+          color: checkColor(s.color),
+          size: checkNumber(s.size, 'shape size', 0.1, 1000),
+          fill: s.fill === true,
+          x1: checkNumber(s.x1, 'shape'),
+          y1: checkNumber(s.y1, 'shape'),
+          x2: checkNumber(s.x2, 'shape'),
+          y2: checkNumber(s.y2, 'shape'),
+        };
       }
-      if (shapes.some((s) => !s || typeof s.type !== 'string')) throw new Error('not a whiteboard save');
-    } catch (err) {
-      ({ shapes, undoStack, redoStack } = prev);
-      throw err;
+      case 'text':
+        checkFields(s, ['type', 'x', 'y', 'text', 'color', 'fontSize'], [], 'text');
+        if (typeof s.text !== 'string' || s.text.length > MAX_TEXT) invalid('text');
+        return {
+          type: 'text',
+          x: checkNumber(s.x, 'text'),
+          y: checkNumber(s.y, 'text'),
+          text: s.text,
+          color: checkColor(s.color),
+          fontSize: checkNumber(s.fontSize, 'font size', 1, 2000),
+        };
+      case 'image': {
+        checkFields(s, ['type', 'id', 'x', 'y', 'w', 'h', assets ? 'asset' : 'src'], [], 'image');
+        if (typeof s.id !== 'string' || !/^[a-z0-9]{1,40}$/.test(s.id)) invalid('image id');
+        let src = s.src;
+        if (assets) {
+          if (!Number.isInteger(s.asset) || s.asset < 0 || s.asset >= assets.length) invalid('image reference');
+          src = assets[s.asset];
+        }
+        if (typeof src !== 'string' || !IMAGE_SRC.test(src)) invalid('image data');
+        return {
+          type: 'image',
+          id: s.id,
+          src,
+          x: checkNumber(s.x, 'image'),
+          y: checkNumber(s.y, 'image'),
+          w: checkNumber(s.w, 'image size', 1e-3),
+          h: checkNumber(s.h, 'image size', 1e-3),
+        };
+      }
+      default:
+        return invalid('unknown item type');
     }
-    if (data.view && data.view.scale) view = data.view;
+  }
+
+  function validateView(v) {
+    if (v === undefined) return null;
+    checkFields(v, ['x', 'y', 'scale'], [], 'view');
+    return { x: checkNumber(v.x, 'view'), y: checkNumber(v.y, 'view'), scale: checkNumber(v.scale, 'zoom', MIN_SCALE, MAX_SCALE) };
+  }
+
+  // Returns { shapes, undo, redo, view } built from fresh, checked objects; throws otherwise.
+  function validateBoard(data) {
+    if (!isPlainObject(data)) invalid('not a board');
+    if (data.v === 2) {
+      checkFields(data, ['v', 'shapes', 'pool', 'assets'], ['view', 'undo', 'redo'], 'board');
+      const assets = checkList(data.assets, 'images');
+      assets.forEach((a) => { if (typeof a !== 'string' || !IMAGE_SRC.test(a)) invalid('image data'); });
+      // Validating each pool entry once keeps snapshots sharing the same objects, as they did when saved.
+      const pool = checkList(data.pool, 'items').map((s) => validateShape(s, assets));
+      const deref = (ids) => checkList(ids, 'item list').map((i) => {
+        if (!Number.isInteger(i) || i < 0 || i >= pool.length) invalid('item reference');
+        return pool[i];
+      });
+      const history = (list) => (list === undefined ? [] : checkList(list, 'history')).map((e) => {
+        checkFields(e, ['s', 'a', 't'], [], 'history entry');
+        if (!ACTIONS.includes(e.a)) invalid('history action');
+        return { shapes: deref(e.s), action: e.a, t: checkNumber(e.t, 'timestamp', 0, 1e14) };
+      });
+      return { shapes: deref(data.shapes), undo: history(data.undo), redo: history(data.redo), view: validateView(data.view) };
+    }
+    // v1: the board only, no history
+    checkFields(data, ['shapes'], ['view'], 'board');
+    return { shapes: checkList(data.shapes, 'items').map((s) => validateShape(s, null)), undo: [], redo: [], view: validateView(data.view) };
+  }
+
+  // Replace the board and its history with a board from validateBoard().
+  function useBoard(board) {
+    shapes = board.shapes;
+    undoStack = board.undo;
+    redoStack = board.redo;
+    if (board.view) view = board.view;
   }
 
   function load() {
+    let raw = null;
     try {
-      const data = JSON.parse(localStorage.getItem(STORAGE_KEY));
-      if (data) applyBoardData(data);
-    } catch { /* start with an empty board */ }
+      raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) useBoard(validateBoard(JSON.parse(raw)));
+    } catch {
+      // Keep the unreadable save aside rather than letting the next autosave overwrite it.
+      try { if (raw) localStorage.setItem(`${STORAGE_KEY}.rejected`, raw); } catch { /* storage full */ }
+      setTimeout(() => toast("The saved board couldn't be loaded, so you're starting with an empty one"), 0);
+    }
   }
 
   // The board's history as a timestamped list of states, oldest first. The first entry is
@@ -1284,6 +1400,10 @@
     if (btn) setTool(btn.dataset.tool);
   });
 
+  // Swatch colours come from data-color here rather than inline style="" attributes, which the
+  // Content Security Policy blocks.
+  document.querySelectorAll('.swatch[data-color]').forEach((s) => s.style.setProperty('--c', s.dataset.color));
+
   $('#colors').addEventListener('click', (e) => {
     const sw = e.target.closest('.swatch[data-color]');
     if (sw) setColor(sw.dataset.color, sw);
@@ -1345,10 +1465,40 @@
     if (replay) updateReplayUI();
   });
 
-  $('#lassoMenu').addEventListener('click', (e) => {
+  // One-time notice before the first AI request. Resolves true to go ahead; the choice is
+  // remembered only once accepted, so Cancel shows it again next time.
+  function confirmAiNotice() {
+    if (readStorage(localStorage, AI_NOTICE_STORAGE)) return Promise.resolve(true);
+    const modal = $('#aiNoticeModal');
+    return new Promise((resolve) => {
+      const finish = (ok) => {
+        modal.hidden = true;
+        modal.removeEventListener('click', onClick);
+        modal.removeEventListener('keydown', onKey);
+        if (ok) {
+          try { localStorage.setItem(AI_NOTICE_STORAGE, '1'); } catch { /* ask again next time */ }
+        }
+        resolve(ok);
+      };
+      const onClick = (e) => {
+        if (e.target.id === 'aiNoticeOk') finish(true);
+        else if (e.target.id === 'aiNoticeCancel' || e.target === modal) finish(false);
+      };
+      const onKey = (e) => { if (e.key === 'Escape') finish(false); };
+      modal.addEventListener('click', onClick);
+      modal.addEventListener('keydown', onKey);
+      modal.hidden = false;
+      $('#aiNoticeOk').focus();
+    });
+  }
+
+  $('#lassoMenu').addEventListener('click', async (e) => {
     const btn = e.target.closest('[data-convert]');
-    const sel = liveLassoSelection();
-    if (!btn || !sel.length) return;
+    if (!btn || !liveLassoSelection().length) return;
+    if (!(await confirmAiNotice())) return;
+    const sel = liveLassoSelection();  // re-read: the board may have changed while the notice was open
+    if (!sel.length) return;
+    // Step 4 sends this capture to Claude; for now it's shown as a preview.
     showCapturePreview(captureSelection(sel), btn.dataset.convert);
   });
   $('#capturePreviewClose').addEventListener('click', () => { $('#capturePreview').hidden = true; });
@@ -1359,7 +1509,8 @@
   // same JSON as the autosave: the board plus its undo/replay history.
 
   const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
-  const DRIVE_NOT_SET_UP = "Google Drive isn't set up — add your Google IDs to GOOGLE_CONFIG in app.js";
+  const MAX_DRIVE_FILE_BYTES = 50 * 1024 * 1024;  // far above any real board; stops huge downloads
+  const DRIVE_NOT_SET_UP ="Google Drive isn't set up — add your Google IDs to GOOGLE_CONFIG in app.js";
   let tokenClient = null;
   let pendingAuth = null;   // { resolve, reject } for the sign-in in progress
   let googleToken = null;   // { value, expiresAt }
@@ -1498,7 +1649,10 @@
         .setDeveloperKey(GOOGLE_CONFIG.apiKey)
         .setAppId(GOOGLE_CONFIG.appId)
         .setCallback((data) => {
-          if (data.action === google.picker.Action.PICKED) resolve({ id: data.docs[0].id, name: data.docs[0].name });
+          if (data.action === google.picker.Action.PICKED) {
+            const doc = data.docs[0];
+            resolve({ id: doc.id, name: doc.name, size: Number(doc.sizeBytes) || 0 });
+          }
           else if (data.action === google.picker.Action.CANCEL) resolve(null);
         })
         .build()
@@ -1513,21 +1667,24 @@
       const token = await getGoogleToken();
       const picked = await pickDriveFile(token);
       if (!picked) return;
+      if (picked.size > MAX_DRIVE_FILE_BYTES) throw new Error('That file is too large to be a whiteboard save');
       const res = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(picked.id)}?alt=media`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await driveJson(res);
-      if (shapes.length && !confirm(`Replace the current board with “${picked.name}”? Its undo history will be replaced too.`)) return;
+      let board;
       try {
-        applyBoardData(data);
+        board = validateBoard(data);
       } catch {
         throw new SyntaxError('not a whiteboard save');
       }
+      if (shapes.length && !confirm(`Replace the current board with “${picked.name}”? Its undo history will be replaced too.`)) return;
+      useBoard(board);
       current = null;
       drag = null;
       lassoSelection = [];
       selectedId = null;
-      driveFile = picked;
+      driveFile = { id: picked.id, name: picked.name };
       updateHistoryButtons();
       scheduleRender();
       scheduleSave();
@@ -1537,25 +1694,48 @@
     }
   }
 
+  // The access token only ever lives in the googleToken variable (never in storage), so
+  // signing out means revoking it with Google, which also withdraws the app's Drive access
+  // until the next sign-in, and forgetting it here.
+  function signOutOfDrive() {
+    const token = googleToken && googleToken.value;
+    googleToken = null;
+    driveFile = null;
+    if (token && window.google && google.accounts) google.accounts.oauth2.revoke(token, () => {});
+    updateDriveStatus();
+    toast(token ? 'Signed out of Google Drive' : "You're not signed in to Google Drive");
+  }
+
+  const driveSignedIn = () => Boolean(googleToken && Date.now() < googleToken.expiresAt);
+
   $('#driveSave').addEventListener('click', saveToDrive);
   $('#driveOpen').addEventListener('click', openFromDrive);
 
-  // ---------- Settings (Anthropic API key) ----------
-  // The key is stored only in this browser's localStorage, under its own entry (never in the
-  // board save), and is read only when a conversion is requested.
+  // ---------- Settings ----------
+  // The API key is kept under its own storage entry (never in the board save). With
+  // "Remember key" off it goes in sessionStorage and disappears when the tab closes; with it on,
+  // it goes in localStorage until forgotten. It's only ever in one of the two.
 
-  function getApiKey() {
+  function readStorage(store, key) {
     try {
-      return localStorage.getItem(API_KEY_STORAGE) || '';
+      return store.getItem(key) || '';
     } catch {
       return '';
     }
   }
 
-  function setApiKey(key) {
+  function removeFromStorage(store, key) {
+    try { store.removeItem(key); } catch { /* storage unavailable: nothing stored there */ }
+  }
+
+  const getApiKey = () => readStorage(sessionStorage, API_KEY_STORAGE) || readStorage(localStorage, API_KEY_STORAGE);
+  const apiKeyRemembered = () => Boolean(readStorage(localStorage, API_KEY_STORAGE));
+
+  function storeApiKey(key, remember) {
     try {
-      if (key) localStorage.setItem(API_KEY_STORAGE, key);
-      else localStorage.removeItem(API_KEY_STORAGE);
+      const [keep, drop] = remember ? [localStorage, sessionStorage] : [sessionStorage, localStorage];
+      drop.removeItem(API_KEY_STORAGE);
+      keep.setItem(API_KEY_STORAGE, key);
       return true;
     } catch {
       toast("Couldn't save the key — browser storage is unavailable");
@@ -1563,16 +1743,36 @@
     }
   }
 
+  function forgetApiKey() {
+    removeFromStorage(localStorage, API_KEY_STORAGE);
+    removeFromStorage(sessionStorage, API_KEY_STORAGE);
+  }
+
   const settingsModal = $('#settingsModal');
   const apiKeyInput = $('#apiKeyInput');
+  const rememberKey = $('#rememberKey');
+
+  function updateKeyStatus() {
+    const key = getApiKey();
+    $('#apiKeyStatus').textContent = key
+      ? `A key ending in …${key.slice(-4)} is ${apiKeyRemembered() ? 'remembered in this browser' : 'kept for this tab only'}.`
+      : 'No key saved.';
+    $('#apiKeyForget').disabled = !key;
+  }
+
+  function updateDriveStatus() {
+    const signedIn = driveSignedIn();
+    $('#driveStatus').textContent = signedIn
+      ? 'Signed in to Google Drive for this session.'
+      : 'Not signed in to Google Drive.';
+    $('#driveSignOut').disabled = !signedIn;
+  }
 
   function openSettings() {
-    const key = getApiKey();
     apiKeyInput.value = '';
-    $('#apiKeyStatus').textContent = key
-      ? `A key is saved (ending in …${key.slice(-4)}). Paste a new one to replace it.`
-      : 'No key saved yet.';
-    $('#apiKeyRemove').hidden = !key;
+    rememberKey.checked = apiKeyRemembered();  // off by default: the key lasts only for this tab
+    updateKeyStatus();
+    updateDriveStatus();
     settingsModal.hidden = false;
     apiKeyInput.focus();
   }
@@ -1586,29 +1786,57 @@
   settingsModal.addEventListener('click', (e) => { if (e.target === settingsModal) closeSettings(); });
   settingsModal.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSettings(); });
 
+  // Save: a newly pasted key, or the existing key moved to match the Remember checkbox.
   $('#settingsForm').addEventListener('submit', (e) => {
     e.preventDefault();
-    const key = apiKeyInput.value.trim();
-    if (!key) {
-      if (getApiKey()) closeSettings();  // nothing new pasted: keep the saved key
-      else toast('Paste your API key first');
-      return;
-    }
-    if (!key.startsWith('sk-ant-')) {
+    const pasted = apiKeyInput.value.trim();
+    if (pasted && !pasted.startsWith('sk-ant-')) {
       toast("That doesn't look like an Anthropic API key — it should start with sk-ant-");
       return;
     }
-    if (setApiKey(key)) {
-      closeSettings();
-      toast('API key saved in this browser');
+    const key = pasted || getApiKey();
+    if (!key) { toast('Paste your API key first'); return; }
+    if (storeApiKey(key, rememberKey.checked)) {
+      apiKeyInput.value = '';
+      updateKeyStatus();
+      toast(rememberKey.checked ? 'API key saved in this browser' : 'API key kept for this tab only');
     }
   });
 
-  $('#apiKeyRemove').addEventListener('click', () => {
-    if (setApiKey('')) {
-      closeSettings();
-      toast('API key removed from this browser');
+  $('#apiKeyForget').addEventListener('click', () => {
+    forgetApiKey();
+    updateKeyStatus();
+    toast('API key forgotten');
+  });
+
+  $('#driveSignOut').addEventListener('click', signOutOfDrive);
+
+  // Clear local data: everything this app keeps in the browser — the board and its history,
+  // the API key (both storages), the AI notice preference, and any set-aside unreadable save.
+  // Files in Google Drive aren't touched.
+  $('#clearLocalData').addEventListener('click', () => {
+    if (!confirm('Clear all ChalkBack data stored in this browser? This removes your board, its undo/replay history and your API key. Files in Google Drive are not affected.')) return;
+    clearTimeout(saveTimer);  // a pending autosave would write the board straight back
+    for (const k of [STORAGE_KEY, `${STORAGE_KEY}.rejected`, API_KEY_STORAGE, AI_NOTICE_STORAGE]) {
+      removeFromStorage(localStorage, k);
+      removeFromStorage(sessionStorage, k);
     }
+    closeReplay();
+    shapes = [];
+    undoStack = [];
+    redoStack = [];
+    view = { x: 0, y: 0, scale: 1 };
+    current = null;
+    drag = null;
+    lasso = null;
+    lassoSelection = [];
+    selectedId = null;
+    driveFile = null;
+    updateHistoryButtons();
+    updateKeyStatus();
+    scheduleRender();
+    closeSettings();
+    toast('Local data cleared');
   });
 
   const help = $('#help');
@@ -1619,7 +1847,7 @@
   const TOOL_KEYS = { v: 'select', k: 'lasso', h: 'hand', p: 'pen', m: 'highlighter', e: 'eraser', l: 'line', a: 'arrow', r: 'rect', o: 'ellipse', t: 'text' };
 
   window.addEventListener('keydown', (e) => {
-    if (!settingsModal.hidden) return;  // the dialog handles its own keys (Esc closes it)
+    if (document.querySelector('.modal-backdrop:not([hidden])')) return;  // open dialogs handle their own keys
     if (e.target instanceof Element && e.target.matches('input, textarea')) return;
     const key = e.key.toLowerCase();
     const mod = e.ctrlKey || e.metaKey;
