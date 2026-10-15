@@ -559,15 +559,27 @@
 
   // ---------- Pointer input ----------
 
+  // Keep receiving the gesture's events even if the pointer leaves the canvas. Browsers can
+  // refuse (e.g. if the pointer was already released); that mustn't abort the stroke.
+  function capturePointer(pointerId) {
+    try { canvas.setPointerCapture(pointerId); } catch { /* pointerup/lostpointercapture still end it */ }
+  }
+
   canvas.addEventListener('pointerdown', (e) => {
     if (textEditor) { textEditor.blur(); return; }
-    if (activePointer !== null) return;
+    if (activePointer !== null) {
+      // Pens and touchscreens sometimes never deliver the previous stroke's pointerup. A new
+      // press from the same pointer, or a new primary pointer, means that stroke is over:
+      // finish it instead of swallowing this one. (A second finger isn't primary: ignore it.)
+      if (e.pointerId !== activePointer && !e.isPrimary) return;
+      endGesture({ type: 'lost', pointerId: activePointer });
+    }
 
     // While replaying, dragging pans the view; drawing is disabled.
     if (e.button === 1 || (e.button === 0 && (state.tool === 'hand' || spaceDown || replay))) {
       e.preventDefault();
       activePointer = e.pointerId;
-      canvas.setPointerCapture(e.pointerId);
+      capturePointer(e.pointerId);
       panning = { sx: e.clientX, sy: e.clientY, vx: view.x, vy: view.y };
       board.classList.add('grabbing');
       return;
@@ -586,7 +598,7 @@
       lasso = { points: [p] };
       lassoSelection = [];
       activePointer = e.pointerId;
-      canvas.setPointerCapture(e.pointerId);
+      capturePointer(e.pointerId);
       scheduleRender();
       return;
     }
@@ -602,14 +614,14 @@
       }
       if (drag) {
         activePointer = e.pointerId;
-        canvas.setPointerCapture(e.pointerId);
+        capturePointer(e.pointerId);
       }
       scheduleRender();
       return;
     }
 
     activePointer = e.pointerId;
-    canvas.setPointerCapture(e.pointerId);
+    capturePointer(e.pointerId);
     const pt = { x: round(p.x), y: round(p.y) };
 
     if (FREEHAND.includes(state.tool)) {
@@ -629,6 +641,9 @@
 
   canvas.addEventListener('pointermove', (e) => {
     if (e.pointerId !== activePointer) return;
+    // No buttons pressed means the pen/finger/mouse was lifted but its pointerup never came.
+    // End the stroke here rather than drawing the hover path to the next letter.
+    if (e.buttons === 0) { endGesture({ type: 'lost', pointerId: e.pointerId }); return; }
 
     if (panning) {
       view.x = panning.vx + e.clientX - panning.sx;
@@ -750,6 +765,9 @@
 
   canvas.addEventListener('pointerup', endGesture);
   canvas.addEventListener('pointercancel', endGesture);
+  // Capture is lost when the pointer is released or the browser takes it away; after a normal
+  // pointerup the gesture is already over and this is ignored.
+  canvas.addEventListener('lostpointercapture', (e) => endGesture({ type: 'lost', pointerId: e.pointerId }));
 
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
