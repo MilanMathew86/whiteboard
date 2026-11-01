@@ -150,6 +150,9 @@ deletions.
 ### 6.3 Opening and saving
 - A board's address is `/b/<public_id>`. Flask serves the app there, and the app loads that board.
   The address is also the **share link**.
+- The account controls (sign-in button, avatar menu, boards list, current board name and save
+  status) sit in the bottom-left panel next to Help and Settings, because the toolbar fills the top
+  of the screen on tablets.
 - Opening a board the user can't access shows "This board doesn't exist or isn't shared with you",
   plus a sign-in link when signed out.
 - **Autosave**: while an account board is open with edit permission, changes are saved to the
@@ -219,7 +222,7 @@ Account settings live in a new **Account** section of the Settings dialog when s
 - **Delete account**: the user types their email to confirm. This deletes the user, their owned
   boards and the shares on them, and any shares that point to their email. Boards that were shared
   with them are unaffected. An audit entry records the deletion without personal data beyond the
-  user's internal id.
+  user's random public id.
 - "Clear local data" keeps working as today and also signs out.
 
 ## 10. API

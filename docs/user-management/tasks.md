@@ -3,6 +3,34 @@
 Status: draft for review · 2026-11-01
 Related: [spec.md](spec.md) · [plan.md](plan.md)
 
+## Progress (2026-11-01)
+
+Built on branch `feature/user-management`. Automated checks run locally: 105 server tests pass
+(99% coverage; the 2 PostgreSQL migration tests run in CI), 23 browser tests pass in Chromium and
+WebKit, and ruff is clean.
+
+| Task | Status |
+|---|---|
+| T0.1 Host + Postgres provider | **Open — owner decision** |
+| T0.2 Google Cloud redirect URIs, client secret, consent scopes | **Open — owner action** |
+| T0.3 Retention, limits shown, domain | **Open — owner decision** (built as specified: immediate deletion) |
+| T1.1–T1.4 Move to `web/`, app factory, headers, tooling | Done — `test_app.py` |
+| T1.3 manual: Drive, Picker, PDF and AI preview with no CSP errors | **Open — manual** |
+| T1.5 CI workflow | Done locally — `.github/workflows/ci.yml` runs on the first push |
+| T1.6 E2E harness + smoke test | Done — `e2e/test_signed_out.py` |
+| T2.1–T2.2 Models, migration | Done — `test_models.py`, `test_migrations.py` |
+| T3.1–T3.4 Sessions, sign-in, `/api/me`, account menu | Done — `test_security.py`, `test_auth.py`, `e2e/test_boards.py` |
+| T3.2 manual: real Google sign-in (localhost and iPad on staging) | **Open — needs T0.2** |
+| T4.1–T4.6 Validation, boards API, autosave, list, conflicts, import | Done — `test_validation.py`, `test_boards.py`, `e2e/test_boards.py` |
+| T4.3 manual: quick Pencil strokes during autosave on iPad | **Open — manual** |
+| T5.1–T5.3 Sharing API, dialog, view-only | Done — `test_shares.py`, `e2e/test_sharing_account_admin.py` |
+| T6.1–T6.4 Display name, sign out everywhere, export, delete | Done — `test_me.py`, e2e |
+| T7.1–T7.2 Admin API and console | Done — `test_admin.py`, e2e; manual iPad check open |
+| T8.1 Privacy policy | Drafted — **owner review**; hosting provider and children's policy marked TODO |
+| T8.2 Deployment | Procfile, `/healthz`, env template done — **deploy open (needs T0.1)** |
+| T8.3 Manual test pass | **Open** |
+| T8.4 Move off GitHub Pages | **Open** |
+
 Each task lists **Done when**: the automated tests that must exist and pass, plus any manual
 checks. Test names are suggestions; what matters is the behaviour they check. Tick a task only
 when all of its criteria pass in CI (or, for manual checks, have been carried out and noted in the
