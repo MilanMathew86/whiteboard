@@ -1,0 +1,8 @@
+{
+ "view": {"x": 0, "y": 0, "scale": 1},
+ "shapes": [
+  {"type": "pen", "color": "#1e1e1e", "size": 4, "points": [{"x": 10, "y": 10}, {"x": 40, "y": 30}, {"x": 80, "y": 20}]},
+  {"type": "ellipse", "color": "#e03131", "size": 4, "fill": true, "x1": 100, "y1": 100, "x2": 180, "y2": 150},
+  {"type": "text", "x": 20, "y": 200, "text": "Old save", "color": "#1971c2", "fontSize": 16}
+ ]
+}
