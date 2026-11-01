@@ -33,6 +33,18 @@
   const INK = ['pen', 'highlighter'];  // what the lasso selects
   const CAPTURE_PAD = 24;         // px of white around a captured selection
   const CAPTURE_MAX_SIDE = 1568;  // px; long edge of a capture (a good size for Claude's vision)
+  // Board backgrounds. `screen` is shown on the board and `print` behind exports and captures
+  // (only white differs: off-white on screen, pure white on paper); `dark` boards get light ink.
+  const PAPERS = {
+    white: { screen: '#f7f8fa', print: '#ffffff', grid: '#cdd2da', dark: false },
+    black: { screen: '#232726', print: '#232726', grid: 'rgba(255, 255, 255, 0.2)', dark: true },
+    green: { screen: '#2b4a3a', print: '#2b4a3a', grid: 'rgba(255, 255, 255, 0.2)', dark: true },
+    blue: { screen: '#1d3557', print: '#1d3557', grid: 'rgba(255, 255, 255, 0.2)', dark: true },
+  };
+  const GRIDS = ['none', 'dots', 'squares', 'lines'];
+  const DEFAULT_PAPER = { bg: 'white', grid: 'dots' };
+  const DARK_INK = '#1e1e1e';   // the default ink on light boards
+  const CHALK_INK = '#f8f9fa';  // ...and on dark ones
 
   const $ = (sel) => document.querySelector(sel);
   const board = $('#board');
@@ -46,6 +58,7 @@
   let undoStack = [];
   let redoStack = [];
   let view = { x: 0, y: 0, scale: 1 };
+  let paper = { ...DEFAULT_PAPER };  // the board's background and grid; saved with the board
   let dpr = window.devicePixelRatio || 1;
 
   let current = null;        // shape being drawn
@@ -118,6 +131,7 @@
     const h = gridCanvas.height / dpr;
     gctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     gctx.clearRect(0, 0, w, h);
+    if (paper.grid === 'none') return;
 
     let step = 24 * view.scale;
     while (step < 14) step *= 2;
@@ -125,12 +139,33 @@
 
     const ox = ((view.x % step) + step) % step;
     const oy = ((view.y % step) + step) % step;
-    gctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--dot').trim() || '#cdd2da';
-    for (let x = ox; x < w; x += step) {
-      for (let y = oy; y < h; y += step) {
-        gctx.fillRect(x - 0.75, y - 0.75, 1.5, 1.5);
+    const color = PAPERS[paper.bg].grid;
+    if (paper.grid === 'dots') {
+      gctx.fillStyle = color;
+      for (let x = ox; x < w; x += step) {
+        for (let y = oy; y < h; y += step) {
+          gctx.fillRect(x - 0.75, y - 0.75, 1.5, 1.5);
+        }
+      }
+      return;
+    }
+    // Squares, or ruled lines (horizontal only); snapped to whole pixels so they don't blur.
+    gctx.strokeStyle = color;
+    gctx.globalAlpha = 0.6;  // lines read heavier than dots of the same colour
+    gctx.lineWidth = 1;
+    gctx.beginPath();
+    if (paper.grid === 'squares') {
+      for (let x = ox; x < w; x += step) {
+        gctx.moveTo(Math.round(x) + 0.5, 0);
+        gctx.lineTo(Math.round(x) + 0.5, h);
       }
     }
+    for (let y = oy; y < h; y += step) {
+      gctx.moveTo(0, Math.round(y) + 0.5);
+      gctx.lineTo(w, Math.round(y) + 0.5);
+    }
+    gctx.stroke();
+    gctx.globalAlpha = 1;
   }
 
   function drawShape(c, s) {
@@ -376,7 +411,7 @@
     };
     const entry = (e) => ({ s: e.shapes.map(ref), a: e.action, t: e.t });
 
-    const data = { v: 2, view, shapes: shapes.map(ref) };
+    const data = { v: 2, view, paper, shapes: shapes.map(ref) };
     if (withHistory) {
       data.undo = undoStack.map(entry);
       data.redo = redoStack.map(entry);
@@ -499,11 +534,19 @@
     return { x: checkNumber(v.x, 'view'), y: checkNumber(v.y, 'view'), scale: checkNumber(v.scale, 'zoom', MIN_SCALE, MAX_SCALE) };
   }
 
-  // Returns { shapes, undo, redo, view } built from fresh, checked objects; throws otherwise.
+  function validatePaper(p) {
+    if (p === undefined) return null;
+    checkFields(p, ['bg', 'grid'], [], 'paper');
+    if (!Object.keys(PAPERS).includes(p.bg)) invalid('background');
+    if (!GRIDS.includes(p.grid)) invalid('grid');
+    return { bg: p.bg, grid: p.grid };
+  }
+
+  // Returns { shapes, undo, redo, view, paper } built from fresh, checked objects; throws otherwise.
   function validateBoard(data) {
     if (!isPlainObject(data)) invalid('not a board');
     if (data.v === 2) {
-      checkFields(data, ['v', 'shapes', 'pool', 'assets'], ['view', 'undo', 'redo'], 'board');
+      checkFields(data, ['v', 'shapes', 'pool', 'assets'], ['view', 'paper', 'undo', 'redo'], 'board');
       const assets = checkList(data.assets, 'images');
       assets.forEach((a) => { if (typeof a !== 'string' || !IMAGE_SRC.test(a)) invalid('image data'); });
       // Validating each pool entry once keeps snapshots sharing the same objects, as they did when saved.
@@ -517,11 +560,14 @@
         if (!ACTIONS.includes(e.a)) invalid('history action');
         return { shapes: deref(e.s), action: e.a, t: checkNumber(e.t, 'timestamp', 0, 1e14) };
       });
-      return { shapes: deref(data.shapes), undo: history(data.undo), redo: history(data.redo), view: validateView(data.view) };
+      return {
+        shapes: deref(data.shapes), undo: history(data.undo), redo: history(data.redo),
+        view: validateView(data.view), paper: validatePaper(data.paper),
+      };
     }
     // v1: the board only, no history
     checkFields(data, ['shapes'], ['view'], 'board');
-    return { shapes: checkList(data.shapes, 'items').map((s) => validateShape(s, null)), undo: [], redo: [], view: validateView(data.view) };
+    return { shapes: checkList(data.shapes, 'items').map((s) => validateShape(s, null)), undo: [], redo: [], view: validateView(data.view), paper: null };
   }
 
   // Replace the board and its history with a board from validateBoard().
@@ -530,6 +576,8 @@
     undoStack = board.undo;
     redoStack = board.redo;
     if (board.view) view = board.view;
+    paper = board.paper || { ...DEFAULT_PAPER };  // boards saved before backgrounds existed
+    applyPaper();
   }
 
   function load() {
@@ -889,7 +937,7 @@
     return box;
   }
 
-  // Render the drawn content, cropped to its bounds plus padding, onto a white canvas.
+  // Render the drawn content, cropped to its bounds plus padding, onto the board's background.
   // Returns { canvas, width, height } with width/height in board units, or null if empty.
   function renderContent() {
     const box = unionBounds(shapes);
@@ -913,7 +961,7 @@
     out.width = layer.width;
     out.height = layer.height;
     const oc = out.getContext('2d');
-    oc.fillStyle = '#ffffff';
+    oc.fillStyle = PAPERS[paper.bg].print;
     oc.fillRect(0, 0, out.width, out.height);
     oc.drawImage(layer, 0, 0);
     return { canvas: out, width: w, height: h };
@@ -1101,7 +1149,8 @@
 
   const boxesOverlap = (a, b) => a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1];
 
-  // Render just the selected strokes on white, with padding, as a base64 PNG for Claude.
+  // Render just the selected strokes on the board's background (so chalk on a dark board stays
+  // visible), with padding, as a base64 PNG for Claude.
   // Also returns the mapping back to the board for placing results:
   //   board = origin + imagePixel / scale
   function captureSelection(sel) {
@@ -1114,7 +1163,7 @@
     const origin = { x: box[0] - CAPTURE_PAD / scale, y: box[1] - CAPTURE_PAD / scale };
 
     // Ink layer: the selected strokes in board order, plus eraser strokes over them so erased
-    // parts stay erased. It's transparent so the erasers can't punch holes in the white.
+    // parts stay erased. It's transparent so the erasers can't punch holes in the background.
     const chosen = new Set(sel);
     const layer = document.createElement('canvas');
     layer.width = width;
@@ -1129,7 +1178,7 @@
     out.width = width;
     out.height = height;
     const oc = out.getContext('2d');
-    oc.fillStyle = '#ffffff';
+    oc.fillStyle = PAPERS[paper.bg].print;
     oc.fillRect(0, 0, width, height);
     oc.drawImage(layer, 0, 0);
 
@@ -1294,7 +1343,7 @@
   }
 
   // Export replay: play from the start while drawing every frame onto an offscreen canvas
-  // (white background, cropped to the drawing) whose video stream feeds a MediaRecorder.
+  // (the board's background, cropped to the drawing) whose video stream feeds a MediaRecorder.
   // The on-screen canvas can't be recorded directly: it's transparent, which encodes as black.
   function exportReplay() {
     if (!replay || replay.recording) return;
@@ -1315,7 +1364,7 @@
     const even = (n) => Math.max(2, Math.round(n / 2) * 2);  // video encoders want even sizes
 
     const video = document.createElement('canvas');
-    const layer = document.createElement('canvas');  // ink only, so the eraser can't cut the white
+    const layer = document.createElement('canvas');  // ink only, so the eraser can't cut the background
     video.width = layer.width = even(w * scale);
     video.height = layer.height = even(h * scale);
 
@@ -1357,7 +1406,7 @@
     for (const s of frameAt(replay.time)) drawShape(lc, s);
 
     const vc = video.getContext('2d');
-    vc.fillStyle = '#ffffff';
+    vc.fillStyle = PAPERS[paper.bg].print;
     vc.fillRect(0, 0, video.width, video.height);
     vc.drawImage(layer, 0, 0);
   }
@@ -1404,6 +1453,24 @@
     const btn = $('#fillToggle');
     btn.classList.toggle('active', state.fill);
     btn.setAttribute('aria-pressed', String(state.fill));
+  }
+
+  // Show the board's background and grid, and keep the default ink readable on it: black ink
+  // vanishes on a dark board and chalk on a light one, so that pair swaps over.
+  function applyPaper() {
+    const p = PAPERS[paper.bg];
+    board.style.background = p.screen;
+    document.querySelectorAll('#paperBg [data-bg]').forEach((b) => b.classList.toggle('active', b.dataset.bg === paper.bg));
+    document.querySelectorAll('#paperGrid [data-grid]').forEach((b) => b.classList.toggle('active', b.dataset.grid === paper.grid));
+    const [from, to] = p.dark ? [DARK_INK, CHALK_INK] : [CHALK_INK, DARK_INK];
+    if (state.color === from) setColor(to, document.querySelector(`.swatch[data-color="${to}"]`));
+    scheduleRender();
+  }
+
+  function setPaper(changes) {
+    paper = { ...paper, ...changes };
+    applyPaper();
+    scheduleSave();
   }
 
   function clearBoard() {
@@ -1852,12 +1919,14 @@
     undoStack = [];
     redoStack = [];
     view = { x: 0, y: 0, scale: 1 };
+    paper = { ...DEFAULT_PAPER };
     current = null;
     drag = null;
     lasso = null;
     lassoSelection = [];
     selectedId = null;
     driveFile = null;
+    applyPaper();
     updateHistoryButtons();
     updateKeyStatus();
     scheduleRender();
@@ -1865,8 +1934,22 @@
     toast('Local data cleared');
   });
 
+  // Help and Board style open in the same corner, so showing one hides the other.
   const help = $('#help');
-  $('#helpBtn').addEventListener('click', () => { help.hidden = !help.hidden; });
+  const paperPanel = $('#paperPanel');
+  const toggleHelp = () => { help.hidden = !help.hidden; paperPanel.hidden = true; };
+  $('#helpBtn').addEventListener('click', toggleHelp);
+  $('#paperBtn').addEventListener('click', () => { paperPanel.hidden = !paperPanel.hidden; help.hidden = true; });
+
+  document.querySelectorAll('#paperBg [data-bg]').forEach((b) => b.style.setProperty('--c', PAPERS[b.dataset.bg].screen));
+  $('#paperBg').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-bg]');
+    if (btn) setPaper({ bg: btn.dataset.bg });
+  });
+  $('#paperGrid').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-grid]');
+    if (btn) setPaper({ grid: btn.dataset.grid });
+  });
 
   // ---------- Keyboard ----------
 
@@ -1900,6 +1983,7 @@
       lassoSelection = [];
       scheduleRender();
       help.hidden = true;
+      paperPanel.hidden = true;
       return;
     }
     if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId) {
@@ -1915,7 +1999,7 @@
     if (e.key === '+' || e.key === '=') { zoomCenter(1.2); return; }
     if (e.key === '-' || e.key === '_') { zoomCenter(1 / 1.2); return; }
     if (e.key === '0') { resetView(); return; }
-    if (e.key === '?') { help.hidden = !help.hidden; }
+    if (e.key === '?') toggleHelp();
   });
 
   window.addEventListener('keyup', (e) => {
@@ -1928,6 +2012,7 @@
   // ---------- Init ----------
 
   load();
+  applyPaper();
   updateHistoryButtons();
   setTool(state.tool);
   setSize(state.size);

@@ -1,6 +1,5 @@
 :root {
   --bg: #f7f8fa;
-  --dot: #cdd2da;
   --panel: #ffffff;
   --border: #e3e6eb;
   --hover: #f1f3f5;
@@ -272,6 +271,59 @@ html, body {
 }
 
 .help-link:hover { text-decoration: underline; }
+
+/* ---------- Board style ---------- */
+
+.paper-panel {
+  z-index: 11;
+  left: 12px;
+  bottom: 64px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  width: 280px;
+  max-width: calc(100vw - 24px);
+  padding: 12px 14px 14px;
+}
+
+.paper-panel h2 { margin: 0; font-size: 13px; font-weight: 600; }
+
+.paper-bg {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+
+.paper-bg button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font: 500 12px var(--font);
+  cursor: pointer;
+}
+
+.paper-bg button:hover { background: var(--hover); }
+.paper-bg button.active { color: var(--accent); }
+
+.paper-bg .chip {
+  width: 40px;
+  height: 28px;
+  border-radius: 6px;
+  background: var(--c);
+  box-shadow: 0 0 0 1px var(--border);
+}
+
+.paper-bg button.active .chip { box-shadow: 0 0 0 2px var(--accent); }
+.paper-grid button { flex: 1; }
+
+.paper-bg button:focus-visible,
+.speed button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* ---------- Replay ---------- */
 
