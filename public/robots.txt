@@ -1,0 +1,4 @@
+# Vercel's static output folder. Everything else is served by the Flask function (api/index.py).
+User-agent: *
+Disallow: /api/
+Disallow: /admin

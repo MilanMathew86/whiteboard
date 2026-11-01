@@ -105,6 +105,19 @@ class ProductionConfig(Config):
     SESSION_COOKIE_SECURE = True
     HSTS = True
     PROXY_FIX = True
+    # Check connections before use (serverless instances sit idle), and don't use server-side
+    # prepared statements, which connection poolers such as Neon's PgBouncer may not keep.
+    SQLALCHEMY_ENGINE_OPTIONS = {"pool_pre_ping": True, "pool_recycle": 300,
+                                 "connect_args": {"prepare_threshold": None}}
+
+    @classmethod
+    def from_env(cls):
+        super().from_env()
+        if os.environ.get("VERCEL"):
+            # Vercel functions reject request bodies over 4.5 MB, so boards must stay under that.
+            cls.MAX_CONTENT_LENGTH = int(4.4 * MB)
+            cls.BOARD_MAX_BYTES = 4 * MB
+        return cls
 
     @classmethod
     def check(cls):

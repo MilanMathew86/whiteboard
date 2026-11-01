@@ -37,7 +37,24 @@ ruff check server
 Set `TEST_DATABASE_URL=postgresql://…` to also run the migration tests against PostgreSQL (CI does).
 `server/tests/fixtures/make_fixtures.py` regenerates the board fixtures by drawing in the real app.
 
-## Deploy
+## Deploy on Vercel
+
+`vercel.json` sends every request to one Python function (`api/index.py`), which runs the Flask app,
+so the app, API and sign-in share one origin and every response gets the security headers.
+
+1. **Database**: in the Vercel project, *Storage → Marketplace → Neon (Postgres)*, connected to the
+   project. It sets `DATABASE_URL` (use the pooled connection string).
+2. **Environment variables** (Production and Preview): `SECRET_KEY` (48+ random characters),
+   `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `ADMIN_EMAILS`. `CHALKBACK_ENV` defaults to production.
+3. **Create the tables** once, and after every new migration, from your machine:
+   `DATABASE_URL="<Neon URL>" flask --app chalkback db upgrade`
+4. **Google Cloud** (OAuth client): add `https://<your-domain>/auth/callback` to *Authorised redirect
+   URIs* and `https://<your-domain>` to *Authorised JavaScript origins* (Drive and the Picker need it).
+
+On Vercel, request bodies are limited to 4.5 MB, so boards are limited to 4 MB there (15 MB elsewhere).
+Rate limits are counted per function instance.
+
+## Deploy elsewhere
 
 Any host that runs a Python web process with PostgreSQL. The `Procfile` runs migrations on release and
 serves the app with gunicorn. Set the variables in `.env.example`, with `CHALKBACK_ENV=production`; the

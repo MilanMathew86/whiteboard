@@ -126,6 +126,38 @@ def test_prod_rejects_short_secret(monkeypatch):
         load_config("production")
 
 
+def _prod_env(monkeypatch):
+    for k, v in {"SECRET_KEY": "x" * 40, "DATABASE_URL": "postgresql://h/db", "GOOGLE_CLIENT_ID": "id",
+                 "GOOGLE_CLIENT_SECRET": "s"}.items():
+        monkeypatch.setenv(k, v)
+
+
+def test_vercel_limits(monkeypatch):
+    _prod_env(monkeypatch)
+    assert load_config("production").BOARD_MAX_BYTES == 15 * 1024 * 1024
+    monkeypatch.setenv("VERCEL", "1")
+    cfg = load_config("production")
+    # Vercel rejects bodies over 4.5 MB; a full board save must fit under that.
+    assert cfg.BOARD_MAX_BYTES < cfg.MAX_CONTENT_LENGTH < 4.5 * 1024 * 1024
+
+
+def test_vercel_entry_point(monkeypatch):
+    import importlib.util
+    from pathlib import Path
+
+    _prod_env(monkeypatch)
+    monkeypatch.delenv("CHALKBACK_ENV", raising=False)
+    path = Path(__file__).resolve().parents[2] / "api" / "index.py"
+    spec = importlib.util.spec_from_file_location("vercel_index", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    app = module.app
+    assert app.config["ENV_NAME"] == "production"
+    r = app.test_client().get("/b/someboard123")
+    assert r.status_code == 200 and b'<base href="/">' in r.data
+    assert "Strict-Transport-Security" in r.headers
+
+
 def test_unknown_env_rejected():
     with pytest.raises(RuntimeError, match="Unknown"):
         load_config("staging-typo")

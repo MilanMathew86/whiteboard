@@ -11,7 +11,7 @@ WebKit, and ruff is clean.
 
 | Task | Status |
 |---|---|
-| T0.1 Host + Postgres provider | **Open — owner decision** |
+| T0.1 Host + Postgres provider | Decided: Vercel + Neon Postgres — config in `vercel.json`, `api/index.py` |
 | T0.2 Google Cloud redirect URIs, client secret, consent scopes | **Open — owner action** |
 | T0.3 Retention, limits shown, domain | **Open — owner decision** (built as specified: immediate deletion) |
 | T1.1–T1.4 Move to `web/`, app factory, headers, tooling | Done — `test_app.py` |
