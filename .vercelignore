@@ -1,0 +1,16 @@
+# Not needed by the deployed app (Vercel runs api/index.py with server/chalkback and web/).
+.venv
+instance
+.env
+docs
+server/tests
+server/e2e
+test-results
+htmlcov
+**/__pycache__
+*.egg-info
+.pytest_cache
+.ruff_cache
+.coverage
+.env.local
+.vercel

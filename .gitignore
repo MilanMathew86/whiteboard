@@ -9,3 +9,7 @@ htmlcov/
 .ruff_cache/
 test-results/
 .vercel/
+
+.vercel
+.env*
+!.env.example

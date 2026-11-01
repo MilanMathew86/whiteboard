@@ -1,14 +1,17 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "framework": null,
-  "buildCommand": "",
-  "outputDirectory": "public",
-  "functions": {
-    "api/index.py": {
-      "includeFiles": "{web,server/chalkback}/**",
-      "excludeFiles": "{.venv,server/tests,server/e2e,docs}/**",
-      "maxDuration": 30
+  "services": {
+    "web": {
+      "root": ".",
+      "framework": "flask",
+      "entrypoint": "api/index.py",
+      "buildCommand": "if [ -z \"$DATABASE_URL\" ]; then echo 'DATABASE_URL is not set: connect Neon Postgres to the Vercel project' >&2; exit 1; fi; PYTHONPATH=server flask --app chalkback db upgrade"
     }
   },
-  "rewrites": [{ "source": "/(.*)", "destination": "/api/index" }]
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": { "type": "service", "service": "web" }
+    }
+  ]
 }
