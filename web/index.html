@@ -2,14 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <!-- Content Security Policy: only the origins the app actually uses.
-       scripts: this site, the pinned jsPDF folder on cdnjs, Google sign-in and the Google API loader (Picker)
-       connect:  Google Drive API, Google sign-in, Anthropic API
-       frames:   Google sign-in and the Google Picker
-       images:   this site, data: images (how board images are stored) and blob: (decoding uploads)
-       styles:   inline styles are allowed because Google's sign-in and Picker scripts inject
-                 <style> blocks (the Picker's dialog lives in this page); scripts stay strict -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com/ajax/libs/jspdf/4.2.1/ https://accounts.google.com/gsi/client https://apis.google.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' https://www.googleapis.com https://accounts.google.com/gsi/ https://api.anthropic.com; frame-src https://accounts.google.com/gsi/ https://docs.google.com; object-src 'none'; base-uri 'self'; form-action 'none'">
+  <!-- The Content Security Policy is sent by the server as a header (server/chalkback/security.py). -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Whiteboard</title>
   <link rel="stylesheet" href="style.css">
@@ -82,14 +75,14 @@
 
     <span class="divider"></span>
 
-    <div class="group size">
+    <div class="group size" id="sizeGroup">
       <input type="range" id="size" min="1" max="40" value="4" title="Stroke size ([ and ])">
       <span class="size-value" id="sizeValue">4</span>
     </div>
 
     <span class="divider"></span>
 
-    <div class="group">
+    <div class="group" id="actions">
       <button class="btn" id="undo" title="Undo (Ctrl+Z)" disabled>
         <svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>
       </button>
@@ -150,6 +143,15 @@
   </div>
 
   <div class="panel help-wrap">
+    <button class="btn" id="boardsBtn" title="Boards — your boards and boards shared with you" hidden>
+      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+    </button>
+    <button class="board-label" id="boardLabel" title="Open the boards list" hidden>
+      <span class="board-label-title" id="boardTitle"></span>
+      <span class="board-label-status" id="boardStatus" role="status"></span>
+    </button>
+    <button class="text-btn" id="copyBoardBtn" title="Make an editable copy of this board in your account" hidden>Make a copy</button>
+    <span class="divider" id="boardDivider" hidden></span>
     <button class="btn" id="paperBtn" title="Board style — background &amp; grid">
       <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M3 15h18"/><path d="M9 3v18"/><path d="M15 3v18"/></svg>
     </button>
@@ -159,6 +161,31 @@
     <button class="btn" id="settingsBtn" title="Settings — Anthropic API key">
       <svg viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
     </button>
+    <a class="text-btn primary sign-in" id="signInBtn" href="/auth/login" hidden>Sign in</a>
+    <button class="btn avatar" id="accountBtn" title="Account" hidden>
+      <img id="accountPic" alt="" referrerpolicy="no-referrer" hidden>
+      <span id="accountInitial"></span>
+    </button>
+  </div>
+
+  <!-- Popovers that open above the bottom-left panel; one at a time. -->
+  <div class="panel popover boards-panel" id="boardsPanel" role="dialog" aria-label="Boards" hidden>
+    <div class="boards-head">
+      <h2>Boards</h2>
+      <span class="spacer"></span>
+      <button class="text-btn primary" id="newBoardBtn">New board</button>
+    </div>
+    <div class="boards-list" id="boardsList"></div>
+  </div>
+
+  <div class="panel popover account-menu" id="accountMenu" role="menu" aria-label="Account" hidden>
+    <div class="account-who">
+      <strong id="accountName"></strong>
+      <span id="accountEmail"></span>
+    </div>
+    <button class="menu-btn" id="accountSettingsBtn" role="menuitem">Account settings</button>
+    <a class="menu-btn" id="adminLink" href="/admin" role="menuitem" hidden>Admin console</a>
+    <button class="menu-btn" id="signOutBtn" role="menuitem">Sign out</button>
   </div>
 
   <!-- Floating menu shown next to a lasso selection. -->
@@ -199,6 +226,30 @@
         </div>
       </section>
 
+      <section class="modal-section" id="accountSection" hidden>
+        <h3>Account</h3>
+        <p class="modal-note" id="accountInfo"></p>
+        <label for="displayNameInput">Display name</label>
+        <div class="modal-row">
+          <input type="text" id="displayNameInput" maxlength="80" autocomplete="off">
+          <button type="button" class="text-btn" id="displayNameSave">Save name</button>
+        </div>
+        <p class="modal-note">Shown to people you share boards with. Leave it empty to use your Google name.</p>
+        <div class="modal-row wrap">
+          <button type="button" class="text-btn" id="signOutAllBtn">Sign out of all devices</button>
+          <a class="text-btn" id="exportDataBtn" href="/api/me/export" download>Download my data</a>
+        </div>
+        <h3>Delete account</h3>
+        <p class="modal-note">
+          Deletes your account, every board you own and the shares on them. Boards other people shared
+          with you aren't affected. This can't be undone.
+        </p>
+        <div class="modal-row">
+          <input type="email" id="deleteConfirmInput" placeholder="Type your email to confirm" autocomplete="off">
+          <button type="button" class="text-btn danger" id="deleteAccountBtn">Delete account</button>
+        </div>
+      </section>
+
       <section class="modal-section">
         <h3>Google Drive</h3>
         <p class="modal-note" id="driveStatus"></p>
@@ -210,8 +261,8 @@
       <section class="modal-section">
         <h3>Local data</h3>
         <p class="modal-note">
-          Removes the board, its undo/replay history, your API key and preferences from this browser.
-          Files in Google Drive are not affected.
+          Removes the board, its undo/replay history, your API key and preferences from this browser,
+          and signs you out. Boards in your account and files in Google Drive are not affected.
         </p>
         <div class="modal-row">
           <button type="button" class="text-btn danger" id="clearLocalData">Clear local data</button>
@@ -243,7 +294,7 @@
     </div>
   </div>
 
-  <div class="panel paper-panel" id="paperPanel" role="group" aria-label="Board style" hidden>
+  <div class="panel popover paper-panel" id="paperPanel" role="group" aria-label="Board style" hidden>
     <h2>Background</h2>
     <div class="paper-bg" id="paperBg">
       <button data-bg="white"><span class="chip"></span>White</button>
@@ -257,6 +308,60 @@
       <button data-grid="dots">Dots</button>
       <button data-grid="squares">Squares</button>
       <button data-grid="lines">Lines</button>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="shareModal" hidden>
+    <form class="modal" id="shareForm" role="dialog" aria-modal="true" aria-labelledby="shareTitle">
+      <h2 id="shareTitle">Share</h2>
+      <div class="modal-row">
+        <input type="email" id="shareEmail" placeholder="Email address" autocomplete="off" spellcheck="false">
+        <select id="sharePermission" aria-label="Permission">
+          <option value="view">Can view</option>
+          <option value="edit">Can edit</option>
+        </select>
+        <button type="submit" class="text-btn primary">Share</button>
+      </div>
+      <p class="modal-note">
+        No email is sent: copy the link and send it yourself. It only opens for the people listed here,
+        once they sign in with that email address.
+      </p>
+      <ul class="share-list" id="shareList"></ul>
+      <div class="modal-actions">
+        <button type="button" class="text-btn" id="shareCopyLink">Copy link</button>
+        <span class="spacer"></span>
+        <button type="button" class="text-btn" id="shareClose">Done</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="modal-backdrop" id="conflictModal" hidden>
+    <div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="conflictTitle">
+      <h2 id="conflictTitle">Someone else changed this board</h2>
+      <p>Your latest changes weren't saved, because another person saved this board after you opened it.</p>
+      <p class="modal-note">
+        Load their version to see their changes (yours are discarded), keep yours as a separate copy, or
+        overwrite their version with yours.
+      </p>
+      <div class="modal-actions wrap">
+        <button type="button" class="text-btn danger" id="conflictOverwrite">Overwrite</button>
+        <span class="spacer"></span>
+        <button type="button" class="text-btn" id="conflictCopy">Keep mine as a copy</button>
+        <button type="button" class="text-btn primary" id="conflictTheirs">Load their version</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="importModal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="importTitle">
+      <h2 id="importTitle">Save this board to your account?</h2>
+      <p>The board on this device can be saved to your account, so you can open it on your other devices.</p>
+      <p class="modal-note">Nothing is uploaded unless you choose to save it. It also stays on this device.</p>
+      <div class="modal-actions">
+        <span class="spacer"></span>
+        <button type="button" class="text-btn" id="importCancel">Not now</button>
+        <button type="button" class="text-btn primary" id="importOk">Save to account</button>
+      </div>
     </div>
   </div>
 

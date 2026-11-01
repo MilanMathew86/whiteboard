@@ -76,6 +76,9 @@
   let replaySpeed = 1;
   let rafId = 0;
   let saveTimer = 0;
+  let me = null;             // the signed-in user from /api/me, or null (see the Account section)
+  let cloud = null;          // the account board on screen, or null for this device's board
+  let loadingBoard = false;  // an account board is being fetched; the board is read-only meanwhile
 
   // ---------- Coordinates ----------
 
@@ -360,14 +363,15 @@
   }
 
   function updateHistoryButtons() {
-    $('#undo').disabled = !undoStack.length;
-    $('#redo').disabled = !redoStack.length;
+    $('#undo').disabled = !undoStack.length || viewOnly();
+    $('#redo').disabled = !redoStack.length || viewOnly();
   }
 
   function afterChange() {
     updateHistoryButtons();
     scheduleRender();
     scheduleSave();
+    cloudChanged();
   }
 
   function scheduleSave() {
@@ -376,6 +380,8 @@
   }
 
   function save() {
+    if (loadingBoard) return;  // the board on screen isn't the local one yet
+    if (cloud) { saveCloudCache(); return; }  // the local board stays as it was
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(serialize(true)));
     } catch {
@@ -580,17 +586,21 @@
     applyPaper();
   }
 
-  function load() {
+  // The board saved on this device, or an empty one.
+  function readLocalBoard() {
     let raw = null;
     try {
       raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) useBoard(validateBoard(JSON.parse(raw)));
+      if (raw) return validateBoard(JSON.parse(raw));
     } catch {
       // Keep the unreadable save aside rather than letting the next autosave overwrite it.
       try { if (raw) localStorage.setItem(`${STORAGE_KEY}.rejected`, raw); } catch { /* storage full */ }
       setTimeout(() => toast("The saved board couldn't be loaded, so you're starting with an empty one"), 0);
     }
+    return emptyBoard();
   }
+
+  const emptyBoard = () => ({ shapes: [], undo: [], redo: [], view: { x: 0, y: 0, scale: 1 }, paper: null });
 
   // The board's history as a timestamped list of states, oldest first. The first entry is
   // the board before the oldest remembered action; redone-away states are not included.
@@ -623,8 +633,8 @@
       endGesture({ type: 'lost', pointerId: activePointer });
     }
 
-    // While replaying, dragging pans the view; drawing is disabled.
-    if (e.button === 1 || (e.button === 0 && (state.tool === 'hand' || spaceDown || replay))) {
+    // While replaying or viewing a board you can't edit, dragging pans the view; drawing is disabled.
+    if (e.button === 1 || (e.button === 0 && (state.tool === 'hand' || spaceDown || readOnly()))) {
       e.preventDefault();
       activePointer = e.pointerId;
       capturePointer(e.pointerId);
@@ -1021,7 +1031,7 @@
 
   // `at` is a world point to center the first image on; defaults to the middle of the screen.
   async function addImages(files, at) {
-    if (replay) return;  // the board is read-only while replaying
+    if (readOnly()) return;  // replaying, or a board this user can only view
     const images = [...files].filter((f) => f.type.startsWith('image/'));
     if (!images.length) { toast('Only image files can be added'); return; }
 
@@ -1279,7 +1289,7 @@
 
     // Editing tools are disabled (inert) for the duration; panning and zooming still work.
     document.body.classList.add('replaying');
-    document.querySelectorAll('.toolbar .group:not(.replay-group)').forEach((g) => { g.inert = true; });
+    updateEditing();
     $('#replayBtn').classList.add('active');
     $('#replayBar').hidden = false;
     setReplayPlaying(true);
@@ -1291,7 +1301,7 @@
     cancelAnimationFrame(replay.raf);
     replay = null;
     document.body.classList.remove('replaying');
-    document.querySelectorAll('.toolbar .group').forEach((g) => { g.inert = false; });
+    updateEditing();
     $('#replayBtn').classList.remove('active');
     $('#replayBar').hidden = true;
     scheduleRender();
@@ -1468,9 +1478,11 @@
   }
 
   function setPaper(changes) {
+    if (viewOnly()) { toast('This board is view-only'); return; }
     paper = { ...paper, ...changes };
     applyPaper();
     scheduleSave();
+    cloudChanged();
   }
 
   function clearBoard() {
@@ -1755,6 +1767,7 @@
 
   async function openFromDrive() {
     if (!GOOGLE_CONFIG.clientId || !GOOGLE_CONFIG.apiKey || !GOOGLE_CONFIG.appId) { toast(DRIVE_NOT_SET_UP); return; }
+    if (viewOnly()) { toast('This board is view-only — make a copy to open a file into it'); return; }
     if (textEditor) textEditor.blur();
     try {
       const token = await getGoogleToken();
@@ -1772,15 +1785,10 @@
         throw new SyntaxError('not a whiteboard save');
       }
       if (shapes.length && !confirm(`Replace the current board with “${picked.name}”? Its undo history will be replaced too.`)) return;
-      useBoard(board);
-      current = null;
-      drag = null;
-      lassoSelection = [];
-      selectedId = null;
+      showBoard(board);
       driveFile = { id: picked.id, name: picked.name };
-      updateHistoryButtons();
-      scheduleRender();
       scheduleSave();
+      cloudChanged();  // an account board takes the file's content
       toast(`Loaded “${picked.name}” from Google Drive`);
     } catch (err) {
       toast(driveErrorMessage(err));
@@ -1866,6 +1874,8 @@
     rememberKey.checked = apiKeyRemembered();  // off by default: the key lasts only for this tab
     updateKeyStatus();
     updateDriveStatus();
+    $('#displayNameInput').value = me ? me.displayName || '' : '';
+    $('#deleteConfirmInput').value = '';
     settingsModal.hidden = false;
     apiKeyInput.focus();
   }
@@ -1907,39 +1917,37 @@
   // Clear local data: everything this app keeps in the browser — the board and its history,
   // the API key (both storages), the AI notice preference, and any set-aside unreadable save.
   // Files in Google Drive aren't touched.
-  $('#clearLocalData').addEventListener('click', () => {
-    if (!confirm('Clear all ChalkBack data stored in this browser? This removes your board, its undo/replay history and your API key. Files in Google Drive are not affected.')) return;
+  $('#clearLocalData').addEventListener('click', async () => {
+    if (!confirm('Clear all ChalkBack data stored in this browser? This removes your board, its undo/replay history and your API key, and signs you out. Boards in your account and files in Google Drive are not affected.')) return;
+    if (me) await endSession(() => api('POST', '/auth/logout'));
     clearTimeout(saveTimer);  // a pending autosave would write the board straight back
-    for (const k of [STORAGE_KEY, `${STORAGE_KEY}.rejected`, API_KEY_STORAGE, AI_NOTICE_STORAGE]) {
+    for (const k of [STORAGE_KEY, `${STORAGE_KEY}.rejected`, API_KEY_STORAGE, AI_NOTICE_STORAGE, ...cloudCacheKeys()]) {
       removeFromStorage(localStorage, k);
       removeFromStorage(sessionStorage, k);
     }
-    closeReplay();
-    shapes = [];
-    undoStack = [];
-    redoStack = [];
-    view = { x: 0, y: 0, scale: 1 };
-    paper = { ...DEFAULT_PAPER };
-    current = null;
-    drag = null;
-    lasso = null;
-    lassoSelection = [];
-    selectedId = null;
-    driveFile = null;
-    applyPaper();
-    updateHistoryButtons();
+    showBoard(emptyBoard());
     updateKeyStatus();
-    scheduleRender();
     closeSettings();
     toast('Local data cleared');
   });
 
-  // Help and Board style open in the same corner, so showing one hides the other.
+  // Help, Board style, Boards and the account menu open in the same corner, so showing one
+  // hides the others. Returns whether `el` is now showing.
   const help = $('#help');
   const paperPanel = $('#paperPanel');
-  const toggleHelp = () => { help.hidden = !help.hidden; paperPanel.hidden = true; };
+  const boardsPanel = $('#boardsPanel');
+  const accountMenu = $('#accountMenu');
+  const popovers = [help, paperPanel, boardsPanel, accountMenu];
+  function togglePopover(el) {
+    const show = el.hidden;
+    popovers.forEach((p) => { p.hidden = true; });
+    el.hidden = !show;
+    return show;
+  }
+  const closePopovers = () => popovers.forEach((p) => { p.hidden = true; });
+  const toggleHelp = () => togglePopover(help);
   $('#helpBtn').addEventListener('click', toggleHelp);
-  $('#paperBtn').addEventListener('click', () => { paperPanel.hidden = !paperPanel.hidden; help.hidden = true; });
+  $('#paperBtn').addEventListener('click', () => togglePopover(paperPanel));
 
   document.querySelectorAll('#paperBg [data-bg]').forEach((b) => b.style.setProperty('--c', PAPERS[b.dataset.bg].screen));
   $('#paperBg').addEventListener('click', (e) => {
@@ -1951,8 +1959,813 @@
     if (btn) setPaper({ grid: btn.dataset.grid });
   });
 
+  // ---------- Account ----------
+  // Served by the ChalkBack server, people can sign in with Google (a full-page redirect the
+  // server handles) to keep boards in their account and share them. Served as plain files there
+  // is no /api/me, and the app works exactly as before, signed out.
+
+  const BOARD_PATH = /^\/b\/([A-Za-z0-9_-]{8,40})\/?$/;
+  const CLOUD_CACHE_PREFIX = 'whiteboard.cloud.';  // unsaved changes to account boards, by board id
+  const CLOUD_SAVE_DELAY = 2000;  // ms after the last change
+  const SIGNIN_MESSAGES = {
+    failed: "Google sign-in didn't complete — please try again",
+    unverified: "Your Google account's email address isn't verified, so it can't be used to sign in",
+    disabled: 'This account has been disabled — contact the site admin',
+  };
+  let serverAvailable = false;
+  let csrfToken = '';
+  let pendingBoardId = null;  // a board link opened while signed out; signing in returns to it
+  let cloudTimer = 0;
+
+  const boardIdFromPath = () => {
+    const m = location.pathname.match(BOARD_PATH);
+    return m ? m[1] : null;
+  };
+
+  function viewOnly() { return loadingBoard || Boolean(cloud && cloud.permission === 'view'); }
+  function readOnly() { return Boolean(replay) || viewOnly(); }
+
+  const errorMessage = (err) => (err instanceof TypeError ? "Couldn't reach the server — check your connection" : err.message);
+
+  // Call the server's JSON API. Errors carry the HTTP status and the server's error code.
+  async function api(method, path, body) {
+    const headers = {};
+    if (body !== undefined) headers['Content-Type'] = 'application/json';
+    if (method !== 'GET') headers['X-CSRF-Token'] = csrfToken;
+    const res = await fetch(path, {
+      method,
+      headers,
+      credentials: 'same-origin',
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    let data = null;
+    try { data = await res.json(); } catch { /* not JSON */ }
+    if (!res.ok) {
+      const err = new Error((data && data.error && data.error.message) || `The server returned an error (${res.status})`);
+      err.status = res.status;
+      err.code = data && data.error ? data.error.code : '';
+      err.data = data || {};
+      if (res.status === 401 && me) signedOutElsewhere();
+      throw err;
+    }
+    return data;
+  }
+
+  function setMe(user, token) {
+    me = user || null;
+    csrfToken = (user && token) || '';
+  }
+
+  // The session ended somewhere else: signed out on another device, disabled, or expired.
+  function signedOutElsewhere() {
+    setMe(null);
+    updateAccountUI();
+    toast('You were signed out — sign in again to keep saving to your account');
+  }
+
+  async function initAccount() {
+    try {
+      const res = await fetch('/api/me', { credentials: 'same-origin' });
+      if (!res.ok || !(res.headers.get('Content-Type') || '').includes('application/json')) throw new Error('no server');
+      const data = await res.json();
+      serverAvailable = true;
+      setMe(data.user, data.csrfToken);
+    } catch {
+      serverAvailable = false;  // plain files, or the server is down: the local board still works
+    }
+    const params = new URLSearchParams(location.search);
+    const justSignedIn = params.has('signedin');
+    reportSignin(params);
+
+    const id = boardIdFromPath();
+    if (id && me) {
+      await openCloudBoard(id, { push: false });
+    } else {
+      if (id) {
+        pendingBoardId = id;
+        history.replaceState(null, '', '/');
+        if (serverAvailable) setTimeout(() => toast('Sign in to open that board'), 0);
+      }
+      if (loadingBoard) showLocalBoard();
+      if (justSignedIn && me && shapes.length) $('#importModal').hidden = false;
+    }
+    updateAccountUI();
+  }
+
+  function reportSignin(params) {
+    if (!params.has('signin') && !params.has('signedin')) return;
+    const problem = params.get('signin');
+    if (problem) toast(SIGNIN_MESSAGES[problem] || SIGNIN_MESSAGES.failed);
+    else if (me) toast(`Signed in as ${me.name}`);
+    history.replaceState(null, '', location.pathname);
+  }
+
+  function updateAccountUI() {
+    $('#signInBtn').hidden = !serverAvailable || Boolean(me);
+    $('#accountBtn').hidden = !me;
+    $('#boardsBtn').hidden = !me;
+    $('#accountSection').hidden = !me;
+    if (me) {
+      const pic = $('#accountPic');
+      if (me.picture && pic.getAttribute('src') !== me.picture) pic.src = me.picture;
+      pic.hidden = !me.picture;
+      $('#accountInitial').hidden = Boolean(me.picture);
+      $('#accountInitial').textContent = (me.name || me.email).trim().charAt(0).toUpperCase();
+      $('#accountBtn').title = `${me.name} — account`;
+      $('#accountName').textContent = me.name;
+      $('#accountEmail').textContent = me.email;
+      $('#adminLink').hidden = me.role !== 'admin';
+      $('#accountInfo').textContent = `Signed in with Google as ${me.googleName || me.email} (${me.email}).`;
+      $('#displayNameInput').placeholder = me.googleName || '';
+    } else {
+      boardsPanel.hidden = true;
+      accountMenu.hidden = true;
+    }
+    updateBoardUI();
+  }
+
+  // A profile picture that won't load falls back to the initial.
+  $('#accountPic').addEventListener('error', () => {
+    $('#accountPic').hidden = true;
+    $('#accountInitial').hidden = false;
+  });
+
+  $('#signInBtn').addEventListener('click', (e) => {
+    e.preventDefault();
+    clearTimeout(saveTimer);
+    save();  // don't lose the last few strokes to the page change
+    const next = pendingBoardId ? `/b/${pendingBoardId}` : location.pathname;
+    location.href = `/auth/login?next=${encodeURIComponent(next)}`;
+  });
+
+  // Sign out on this device (`request` is the server call that ends the session), keeping any
+  // unsaved work in this browser and going back to the local board.
+  async function endSession(request, message) {
+    const wasCloud = Boolean(cloud);
+    await leaveCloudBoard();
+    let ok = true;
+    try {
+      await request();
+    } catch (err) {
+      ok = err.status === 401;  // already signed out
+      if (!ok) toast(errorMessage(err));
+    }
+    if (wasCloud) {
+      showLocalBoard();
+      history.pushState(null, '', '/');
+    }
+    if (ok) {
+      setMe(null);
+      updateAccountUI();
+      if (message) toast(message);
+    }
+    return ok;
+  }
+
+  $('#accountBtn').addEventListener('click', () => togglePopover(accountMenu));
+  $('#accountSettingsBtn').addEventListener('click', () => { closePopovers(); openSettings(); });
+  $('#signOutBtn').addEventListener('click', () => {
+    closePopovers();
+    endSession(() => api('POST', '/auth/logout'), 'Signed out');
+  });
+
+  // ---------- Account boards ----------
+  // An account board saves itself about two seconds after each change. Every save names the
+  // version it was based on; if someone else saved in between, the server refuses (409) and the
+  // conflict dialog decides. Unsaved changes are also kept in this browser, so a closed tab or a
+  // lost connection doesn't lose them.
+
+  const cloudState = (meta) => ({
+    id: meta.id,
+    title: meta.title,
+    owner: meta.owner,
+    permission: meta.permission,
+    version: meta.version,
+    dirty: false,      // changed since the last save started
+    saving: null,      // the save in progress (a promise)
+    conflict: false,   // someone else saved first; waiting for the conflict dialog
+    error: '',         // 'signed-out', or 'rejected' for a save the server won't take as it is
+    retries: 0,
+    retryTimer: 0,
+  });
+
+  // Replace what's on screen with a board from validateBoard(), dropping gestures and selections.
+  function showBoard(b) {
+    closeReplay();
+    if (textEditor) textEditor.blur();
+    useBoard(b);
+    current = null;
+    drag = null;
+    lasso = null;
+    lassoSelection = [];
+    selectedId = null;
+    activePointer = null;
+    panning = null;
+    board.classList.remove('grabbing');
+    driveFile = null;
+    updateHistoryButtons();
+    scheduleRender();
+  }
+
+  // Put this device's board back on screen.
+  function showLocalBoard() {
+    cloud = null;
+    loadingBoard = false;
+    showBoard(readLocalBoard());
+    updateEditing();
+    updateBoardUI();
+  }
+
+  async function openLocalBoard({ push = true } = {}) {
+    if (!cloud) return;
+    await leaveCloudBoard();
+    showLocalBoard();
+    if (push) history.pushState(null, '', '/');
+  }
+
+  async function openCloudBoard(id, { push = true } = {}) {
+    if (cloud && cloud.id === id) return true;
+    await leaveCloudBoard();
+    loadingBoard = true;
+    updateEditing();
+    updateBoardUI();
+    try {
+      const res = await api('GET', `/api/boards/${encodeURIComponent(id)}`);
+      const b = validateBoard(JSON.parse(res.data));  // other people can write shared boards
+      loadingBoard = false;
+      cloud = cloudState(res.board);
+      showBoard(b);
+      offerCachedChanges();
+      if (push) history.pushState(null, '', `/b/${id}`);
+      return true;
+    } catch (err) {
+      toast(err.status === 404 ? "That board doesn't exist or isn't shared with you"
+        : err.status ? errorMessage(err)
+        : err instanceof TypeError ? errorMessage(err)
+        : "That board's data is damaged, so it can't be opened");
+      showLocalBoard();
+      if (boardIdFromPath()) history.replaceState(null, '', '/');
+      return false;
+    } finally {
+      updateEditing();
+      updateBoardUI();
+    }
+  }
+
+  // Before another board replaces this one: commit any text being typed and save what's unsaved
+  // (a copy stays in this browser if that fails).
+  async function leaveCloudBoard() {
+    if (textEditor) textEditor.blur();
+    if (!cloud) return;
+    const leaving = cloud;
+    clearTimeout(cloudTimer);
+    await pushCloud();
+    clearTimeout(leaving.retryTimer);
+    clearTimeout(saveTimer);
+    if (cloud === leaving) saveCloudCache();
+    cloud = null;
+  }
+
+  function cloudChanged() {
+    if (!cloud || cloud.permission === 'view') return;
+    cloud.dirty = true;
+    if (!cloud.conflict && !cloud.retryTimer) {
+      clearTimeout(cloudTimer);
+      cloudTimer = setTimeout(pushCloud, CLOUD_SAVE_DELAY);
+    }
+    updateBoardUI();
+  }
+
+  function pushCloud() {
+    const target = cloud;
+    if (!target || !target.dirty || target.conflict || target.permission === 'view') return Promise.resolve();
+    if (target.saving) return target.saving.then(() => pushCloud());
+    clearTimeout(cloudTimer);
+    clearTimeout(target.retryTimer);
+    target.retryTimer = 0;
+    target.dirty = false;
+    target.error = '';
+    const body = { data: serialize(true), version: target.version };
+    target.saving = api('PUT', `/api/boards/${encodeURIComponent(target.id)}`, body)
+      .then((res) => {
+        target.version = res.version;
+        target.retries = 0;
+      }, (err) => {
+        target.dirty = true;
+        saveFailed(target, err);
+      })
+      .finally(() => {
+        target.saving = null;
+        if (cloud !== target) return;
+        scheduleSave();  // refresh, or drop, this board's copy of unsaved changes
+        if (target.dirty && !target.conflict && !target.retryTimer && !target.error) {
+          clearTimeout(cloudTimer);
+          cloudTimer = setTimeout(pushCloud, CLOUD_SAVE_DELAY);
+        }
+        updateBoardUI();
+      });
+    updateBoardUI();
+    return target.saving;
+  }
+
+  function saveFailed(target, err) {
+    const here = cloud === target;
+    if (err.status === 409) {
+      target.conflict = true;
+      if (here) $('#conflictModal').hidden = false;
+    } else if (err.status === 404 || (err.status === 403 && err.code === 'forbidden')) {
+      // The board was deleted or unshared, or this user can only view it now.
+      target.permission = 'view';
+      if (here) {
+        updateEditing();
+        toast("You can't edit this board any more — make a copy to keep your changes");
+      }
+    } else if (err.status === 401) {
+      target.error = 'signed-out';
+    } else if (err.status && err.status !== 429 && err.status < 500) {
+      target.error = 'rejected';  // too large, storage full…: retried after the next change
+      if (here) toast(err.message);
+    } else {
+      // Offline, server trouble or rate limited: try again, waiting longer each time (up to a minute).
+      const delay = Math.min(60000, 2000 * 2 ** target.retries);
+      target.retries += 1;
+      target.retryTimer = setTimeout(() => {
+        target.retryTimer = 0;
+        pushCloud();
+      }, delay);
+    }
+  }
+
+  function saveCloudCache() {
+    const key = CLOUD_CACHE_PREFIX + cloud.id;
+    if (!cloud.dirty && !cloud.saving && !cloud.conflict) {
+      removeFromStorage(localStorage, key);
+      return;
+    }
+    try {
+      localStorage.setItem(key, JSON.stringify({ base: cloud.version, data: serialize(true) }));
+    } catch { /* storage full: the server save is what counts */ }
+  }
+
+  function readCloudCache(id) {
+    try {
+      const cached = JSON.parse(localStorage.getItem(CLOUD_CACHE_PREFIX + id));
+      return cached && Number.isInteger(cached.base) ? { base: cached.base, board: validateBoard(cached.data) } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function cloudCacheKeys() {
+    try {
+      return Object.keys(localStorage).filter((k) => k.startsWith(CLOUD_CACHE_PREFIX));
+    } catch {
+      return [];
+    }
+  }
+
+  // Changes from an earlier visit that never reached the server (tab closed, connection lost).
+  function offerCachedChanges() {
+    const cached = readCloudCache(cloud.id);
+    if (!cached) return;
+    if (cloud.permission === 'view'
+      || !confirm('This board has changes from your last visit that were never saved. Restore them?')) {
+      removeFromStorage(localStorage, CLOUD_CACHE_PREFIX + cloud.id);
+      return;
+    }
+    showBoard(cached.board);
+    cloud.version = cached.base;  // if someone saved since, saving brings up the conflict choices
+    cloudChanged();
+  }
+
+  // Save the board on screen as a new account board and switch to it (the local board, or an
+  // account board's content as a copy, including changes that couldn't be saved to it).
+  async function saveAsNewBoard(title) {
+    if (textEditor) textEditor.blur();
+    try {
+      const res = await api('POST', '/api/boards', { title: title.slice(0, 120), data: serialize(true) });
+      if (cloud) {
+        clearTimeout(cloudTimer);
+        clearTimeout(cloud.retryTimer);
+        removeFromStorage(localStorage, CLOUD_CACHE_PREFIX + cloud.id);
+      } else {
+        clearTimeout(saveTimer);
+        save();  // the local board stays on this device as it is
+      }
+      cloud = cloudState(res.board);
+      history.pushState(null, '', `/b/${cloud.id}`);
+      updateEditing();
+      updateBoardUI();
+      toast(`Saved to your account as “${cloud.title}”`);
+      return true;
+    } catch (err) {
+      toast(errorMessage(err));
+      return false;
+    }
+  }
+
+  function cloudStatus() {
+    if (loadingBoard) return ['Loading…', false];
+    if (!cloud) return ['', false];
+    if (cloud.permission === 'view') return [cloud.dirty ? 'View only — changes not saved' : 'View only', cloud.dirty];
+    if (cloud.conflict) return ['Not saved — someone else changed it', true];
+    if (cloud.error === 'signed-out') return ['Not saved — sign in again', true];
+    if (cloud.error) return ['Not saved', true];
+    if (cloud.retryTimer) return [navigator.onLine ? 'Not saved — retrying' : 'Offline', true];
+    if (cloud.saving || cloud.dirty) return ['Saving…', false];
+    return ['Saved', false];
+  }
+
+  function updateBoardUI() {
+    const showLabel = loadingBoard || Boolean(cloud);
+    $('#boardLabel').hidden = !showLabel;
+    $('#boardDivider').hidden = !showLabel && !me;
+    $('#boardTitle').textContent = cloud ? cloud.title : 'Board';
+    const [text, warn] = cloudStatus();
+    $('#boardStatus').textContent = text;
+    $('#boardStatus').classList.toggle('warn', warn);
+    $('#copyBoardBtn').hidden = !(cloud && cloud.permission === 'view' && me);
+    document.title = cloud ? `${cloud.title} — Whiteboard` : 'Whiteboard';
+  }
+
+  // Replay locks every editing control. A view-only board locks drawing and the edit buttons but
+  // keeps export, Drive save and replay.
+  function updateEditing() {
+    const locked = viewOnly();
+    document.querySelectorAll('.toolbar .group:not(.replay-group)').forEach((g) => {
+      g.inert = Boolean(replay) || (locked && ['tools', 'colors', 'sizeGroup'].includes(g.id));
+    });
+    document.body.classList.toggle('view-only', locked);
+    $('#clear').disabled = locked;
+    $('#driveOpen').disabled = locked;
+    if (locked) {
+      lassoSelection = [];
+      selectedId = null;
+    }
+    updateHistoryButtons();
+    scheduleRender();
+  }
+
+  $('#copyBoardBtn').addEventListener('click', () => saveAsNewBoard(`Copy of ${cloud.title}`));
+
+  $('#importCancel').addEventListener('click', () => { $('#importModal').hidden = true; });
+  $('#importOk').addEventListener('click', () => {
+    $('#importModal').hidden = true;
+    saveAsNewBoard(`Board from ${new Date().toLocaleDateString()}`);
+  });
+
+  // Conflict: someone else saved this board after it was opened here.
+  $('#conflictTheirs').addEventListener('click', () => {
+    const id = cloud.id;
+    removeFromStorage(localStorage, CLOUD_CACHE_PREFIX + id);
+    $('#conflictModal').hidden = true;
+    cloud = null;  // drop this version without saving it
+    openCloudBoard(id, { push: false });
+  });
+  $('#conflictCopy').addEventListener('click', async () => {
+    if (await saveAsNewBoard(`${cloud.title} (my copy)`)) $('#conflictModal').hidden = true;
+  });
+  $('#conflictOverwrite').addEventListener('click', async () => {
+    if (!confirm('Replace their changes with yours? Their version will be lost.')) return;
+    try {
+      const res = await api('GET', `/api/boards/${encodeURIComponent(cloud.id)}`);
+      cloud.version = res.board.version;
+      cloud.conflict = false;
+      cloud.dirty = true;
+      $('#conflictModal').hidden = true;
+      await pushCloud();
+    } catch (err) {
+      toast(errorMessage(err));
+    }
+  });
+
+  window.addEventListener('popstate', () => {
+    const id = boardIdFromPath();
+    if (id && me) openCloudBoard(id, { push: false });
+    else if (!id && cloud) openLocalBoard({ push: false });
+  });
+
+  window.addEventListener('online', () => {
+    if (cloud && cloud.retryTimer) {
+      clearTimeout(cloud.retryTimer);
+      cloud.retryTimer = 0;
+      pushCloud();
+    }
+  });
+  window.addEventListener('offline', updateBoardUI);
+
+  // Leaving the page: write this browser's copy straight away, and try to finish the save.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'hidden') return;
+    clearTimeout(saveTimer);
+    save();
+    if (cloud && cloud.dirty) pushCloud();
+  });
+  window.addEventListener('beforeunload', (e) => {
+    clearTimeout(saveTimer);
+    save();
+    if (cloud && (cloud.dirty || cloud.saving)) e.preventDefault();
+  });
+
+  // ---------- Boards list ----------
+
+  function el(tag, className, text) {
+    const e = document.createElement(tag);
+    if (className) e.className = className;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+
+  function actionButton(label, onClick, danger) {
+    const b = el('button', danger ? 'text-btn danger' : 'text-btn', label);
+    b.type = 'button';
+    b.addEventListener('click', onClick);
+    return b;
+  }
+
+  const formatSize = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(1)} MB`);
+
+  function formatWhen(iso) {
+    const d = new Date(iso);
+    const now = new Date();
+    if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return d.toLocaleDateString([], { day: 'numeric', month: 'short', year: d.getFullYear() === now.getFullYear() ? undefined : 'numeric' });
+  }
+
+  function boardMetaText(b) {
+    const parts = [];
+    if (b.permission !== 'owner') parts.push(`${b.owner.name} · ${b.permission === 'edit' ? 'can edit' : 'can view'}`);
+    parts.push(`updated ${formatWhen(b.updatedAt)}`);
+    if (b.permission === 'owner') parts.push(formatSize(b.size));
+    return parts.join(' · ');
+  }
+
+  function boardRow(b) {
+    const row = el('div', cloud && cloud.id === b.id ? 'board-row current' : 'board-row');
+    const open = el('button', 'board-open');
+    open.append(el('span', 'board-title', b.title), el('span', 'board-meta', boardMetaText(b)));
+    open.addEventListener('click', () => { closePopovers(); openCloudBoard(b.id); });
+    const actions = el('div', 'board-actions');
+    if (b.permission !== 'view') actions.append(actionButton('Rename', () => renameBoard(b)));
+    if (b.permission === 'owner') actions.append(actionButton('Share', () => openShareDialog(b)));
+    actions.append(actionButton('Make a copy', () => copyBoard(b)));
+    actions.append(b.permission === 'owner'
+      ? actionButton('Delete', () => deleteBoard(b), true)
+      : actionButton('Leave', () => leaveBoard(b), true));
+    row.append(open, actions);
+    return row;
+  }
+
+  function localRow() {
+    const row = el('div', cloud || loadingBoard ? 'board-row' : 'board-row current');
+    const open = el('button', 'board-open');
+    open.append(el('span', 'board-title', 'Board on this device'), el('span', 'board-meta', 'Saved in this browser only'));
+    open.addEventListener('click', () => { closePopovers(); openLocalBoard(); });
+    row.append(open);
+    if (!cloud) {
+      const actions = el('div', 'board-actions');
+      actions.append(actionButton('Save to account', () => {
+        closePopovers();
+        saveAsNewBoard(`Board from ${new Date().toLocaleDateString()}`);
+      }));
+      row.append(actions);
+    }
+    return row;
+  }
+
+  async function refreshBoardsList() {
+    const list = $('#boardsList');
+    if (!list.children.length) list.append(el('p', 'empty', 'Loading…'));
+    let data;
+    try {
+      data = await api('GET', '/api/boards');
+    } catch (err) {
+      list.replaceChildren(el('p', 'empty', errorMessage(err)));
+      return;
+    }
+    list.replaceChildren(
+      el('h3', '', 'On this device'), localRow(),
+      el('h3', '', 'My boards'),
+      ...(data.owned.length ? data.owned.map(boardRow) : [el('p', 'empty', 'No boards yet — start a new one, or save the board on this device.')]),
+      el('h3', '', 'Shared with me'),
+      ...(data.shared.length ? data.shared.map(boardRow) : [el('p', 'empty', 'Nothing has been shared with you yet.')]),
+    );
+  }
+
+  async function renameBoard(b) {
+    const title = prompt('Rename board', b.title);
+    if (title === null || !title.trim() || title.trim() === b.title) return;
+    try {
+      const res = await api('PATCH', `/api/boards/${encodeURIComponent(b.id)}`, { title });
+      if (cloud && cloud.id === b.id) {
+        cloud.title = res.board.title;
+        updateBoardUI();
+      }
+      refreshBoardsList();
+    } catch (err) {
+      toast(errorMessage(err));
+    }
+  }
+
+  async function copyBoard(b) {
+    try {
+      const res = await api('POST', `/api/boards/${encodeURIComponent(b.id)}/copy`);
+      toast(`Copied as “${res.board.title}”`);
+      refreshBoardsList();
+    } catch (err) {
+      toast(errorMessage(err));
+    }
+  }
+
+  // After the board on screen is deleted or left: back to the local board, nothing to save.
+  function dropCurrentBoard(id) {
+    removeFromStorage(localStorage, CLOUD_CACHE_PREFIX + id);
+    if (cloud && cloud.id === id) {
+      clearTimeout(cloudTimer);
+      clearTimeout(cloud.retryTimer);
+      showLocalBoard();
+      history.pushState(null, '', '/');
+    }
+  }
+
+  async function deleteBoard(b) {
+    if (!confirm(`Delete “${b.title}”? Anyone it's shared with loses it too. This can't be undone.`)) return;
+    try {
+      await api('DELETE', `/api/boards/${encodeURIComponent(b.id)}`);
+      dropCurrentBoard(b.id);
+      toast(`Deleted “${b.title}”`);
+      refreshBoardsList();
+    } catch (err) {
+      toast(errorMessage(err));
+    }
+  }
+
+  async function leaveBoard(b) {
+    if (!confirm(`Remove “${b.title}” from your boards? ${b.owner.name} can share it with you again.`)) return;
+    try {
+      await api('DELETE', `/api/boards/${encodeURIComponent(b.id)}/shares/me`);
+      dropCurrentBoard(b.id);
+      refreshBoardsList();
+    } catch (err) {
+      toast(errorMessage(err));
+    }
+  }
+
+  $('#boardsBtn').addEventListener('click', () => { if (togglePopover(boardsPanel)) refreshBoardsList(); });
+  $('#boardLabel').addEventListener('click', () => {
+    if (cloud && cloud.conflict) { $('#conflictModal').hidden = false; return; }
+    if (me && togglePopover(boardsPanel)) refreshBoardsList();
+  });
+
+  $('#newBoardBtn').addEventListener('click', async () => {
+    try {
+      const res = await api('POST', '/api/boards', { title: 'Untitled board' });
+      closePopovers();
+      await openCloudBoard(res.board.id);
+    } catch (err) {
+      toast(errorMessage(err));
+    }
+  });
+
+  // ---------- Sharing ----------
+
+  const shareModal = $('#shareModal');
+  let sharing = null;  // the board whose sharing dialog is open
+  let sharesRequest = 0;  // so a slow, older reply can't overwrite a newer list
+
+  function openShareDialog(b) {
+    closePopovers();
+    sharing = b;
+    $('#shareTitle').textContent = `Share “${b.title}”`;
+    $('#shareEmail').value = '';
+    $('#shareList').replaceChildren();
+    shareModal.hidden = false;
+    $('#shareEmail').focus();
+    refreshShares();
+  }
+
+  async function refreshShares() {
+    const request = ++sharesRequest;
+    try {
+      const res = await api('GET', `/api/boards/${encodeURIComponent(sharing.id)}/shares`);
+      if (request !== sharesRequest || !sharing) return;
+      $('#shareList').replaceChildren(...res.shares.map(shareItem));
+    } catch (err) {
+      toast(errorMessage(err));
+    }
+  }
+
+  function shareItem(s) {
+    const li = el('li');
+    const who = el('div', 'share-who', s.name || s.email);
+    who.append(el('span', '', s.name ? s.email : "hasn't signed in yet"));
+    const select = el('select');
+    select.setAttribute('aria-label', `Permission for ${s.email}`);
+    for (const [value, label] of [['view', 'Can view'], ['edit', 'Can edit']]) {
+      const option = el('option', '', label);
+      option.value = value;
+      select.append(option);
+    }
+    select.value = s.permission;
+    const url = `/api/boards/${encodeURIComponent(sharing.id)}/shares/${encodeURIComponent(s.id)}`;
+    select.addEventListener('change', async () => {
+      try {
+        await api('PATCH', url, { permission: select.value });
+        toast(`${s.name || s.email} ${select.value === 'edit' ? 'can now edit' : 'can now only view'}`);
+      } catch (err) {
+        toast(errorMessage(err));
+        refreshShares();
+      }
+    });
+    const remove = actionButton('Remove', async () => {
+      try {
+        await api('DELETE', url);
+        refreshShares();
+      } catch (err) {
+        toast(errorMessage(err));
+      }
+    }, true);
+    li.append(who, select, remove);
+    return li;
+  }
+
+  $('#shareForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const email = $('#shareEmail').value.trim();
+    if (!email) return;
+    try {
+      await api('POST', `/api/boards/${encodeURIComponent(sharing.id)}/shares`, { email, permission: $('#sharePermission').value });
+      if ($('#shareEmail').value.trim() === email) $('#shareEmail').value = '';  // not the next one being typed
+      toast(`Shared with ${email}`);
+      refreshShares();
+    } catch (err) {
+      toast(errorMessage(err));
+    }
+  });
+
+  $('#shareCopyLink').addEventListener('click', () => {
+    const url = `${location.origin}/b/${sharing.id}`;
+    const fallback = () => prompt('Copy this link', url);
+    if (navigator.clipboard) navigator.clipboard.writeText(url).then(() => toast('Link copied'), fallback);
+    else fallback();
+  });
+
+  const closeShare = () => { shareModal.hidden = true; sharing = null; };
+  $('#shareClose').addEventListener('click', closeShare);
+  shareModal.addEventListener('click', (e) => { if (e.target === shareModal) closeShare(); });
+  shareModal.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeShare(); });
+
+  // ---------- Account settings ----------
+
+  async function saveDisplayName() {
+    try {
+      const res = await api('PATCH', '/api/me', { displayName: $('#displayNameInput').value });
+      me = res.user;
+      updateAccountUI();
+      toast('Name saved');
+    } catch (err) {
+      toast(errorMessage(err));
+    }
+  }
+
+  $('#displayNameSave').addEventListener('click', saveDisplayName);
+  // Enter would submit the settings form (which saves the API key), so handle it here.
+  $('#displayNameInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); saveDisplayName(); }
+  });
+  $('#deleteConfirmInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') e.preventDefault(); });
+
+  $('#signOutAllBtn').addEventListener('click', async () => {
+    if (await endSession(() => api('POST', '/api/me/signout-all'), 'Signed out on all your devices')) closeSettings();
+  });
+
+  $('#deleteAccountBtn').addEventListener('click', async () => {
+    const email = $('#deleteConfirmInput').value.trim();
+    if (!email) { toast('Type your email address to confirm'); return; }
+    if (!confirm("Delete your account and every board you own? This can't be undone.")) return;
+    try {
+      await api('DELETE', '/api/me', { confirmEmail: email });
+    } catch (err) {
+      toast(errorMessage(err));
+      return;
+    }
+    // The account is gone, and with it every account board: nothing left to save.
+    for (const k of cloudCacheKeys()) removeFromStorage(localStorage, k);
+    if (cloud) {
+      clearTimeout(cloudTimer);
+      clearTimeout(cloud.retryTimer);
+      showLocalBoard();
+      history.pushState(null, '', '/');
+    }
+    setMe(null);
+    updateAccountUI();
+    closeSettings();
+    toast('Your account was deleted');
+  });
+
   // ---------- Keyboard ----------
 
+  const VIEW_KEYS = [' ', 'Escape', '+', '=', '-', '_', '0', '?'];
   const TOOL_KEYS = { v: 'select', k: 'lasso', h: 'hand', p: 'pen', m: 'highlighter', e: 'eraser', l: 'line', a: 'arrow', r: 'rect', o: 'ellipse', t: 'text' };
 
   window.addEventListener('keydown', (e) => {
@@ -1967,9 +2780,11 @@
       return;
     }
 
+    if (mod && key === 's') { e.preventDefault(); exportPDF(); return; }
+    // On a view-only board only panning, zooming, help and Esc work.
+    if (viewOnly() && (mod || !VIEW_KEYS.includes(e.key))) return;
     if (mod && key === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
     if (mod && key === 'y') { e.preventDefault(); redo(); return; }
-    if (mod && key === 's') { e.preventDefault(); exportPDF(); return; }
     if (mod || e.altKey) return;
 
     if (e.key === ' ') {
@@ -1982,8 +2797,7 @@
       selectedId = null;
       lassoSelection = [];
       scheduleRender();
-      help.hidden = true;
-      paperPanel.hidden = true;
+      closePopovers();
       return;
     }
     if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId) {
@@ -2011,12 +2825,16 @@
 
   // ---------- Init ----------
 
-  load();
+  // A /b/<id> address opens an account board once the server says who's signed in. Until then
+  // the board stays empty and read-only, rather than showing (and saving over) the local board.
+  loadingBoard = Boolean(boardIdFromPath());
+  if (!loadingBoard) useBoard(readLocalBoard());
   applyPaper();
-  updateHistoryButtons();
+  updateEditing();
   setTool(state.tool);
   setSize(state.size);
   resize();
+  initAccount();
 
   // Read-only hook for the replay feature (and for inspecting history from the console).
   window.whiteboard = { timeline };

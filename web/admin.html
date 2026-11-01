@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin — Whiteboard</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="admin-page">
+  <header class="admin-header">
+    <h1>Admin console</h1>
+    <span class="spacer"></span>
+    <a class="text-btn" href="/">Back to the board</a>
+  </header>
+
+  <div class="admin-bar">
+    <nav class="speed admin-tabs" role="tablist" aria-label="Admin sections">
+      <button role="tab" data-tab="users" class="active" aria-selected="true">Users</button>
+      <button role="tab" data-tab="audit" aria-selected="false">Audit log</button>
+    </nav>
+  </div>
+
+  <section id="usersTab" class="admin-section">
+    <form class="admin-search" id="searchForm" role="search">
+      <input type="search" id="searchInput" placeholder="Search by name or email" aria-label="Search users">
+      <button type="submit" class="text-btn primary">Search</button>
+    </form>
+    <p class="admin-note">
+      You can see account details and how much each person stores, but not their boards' titles or content.
+    </p>
+    <div class="admin-table-wrap">
+      <table class="admin-table">
+        <thead>
+          <tr>
+            <th>User</th><th>Role</th><th>Status</th><th>Boards</th><th>Storage</th>
+            <th>Joined</th><th>Last sign-in</th><th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="usersBody"></tbody>
+      </table>
+    </div>
+    <div class="admin-pager" id="usersPager"></div>
+  </section>
+
+  <section id="auditTab" class="admin-section" hidden>
+    <div class="admin-search">
+      <select id="auditFilter" aria-label="Filter by action">
+        <option value="">All actions</option>
+        <option value="user.role">Role changes</option>
+        <option value="user.status">Disable / enable</option>
+        <option value="user.signout">Signed out</option>
+        <option value="user.delete">Deleted by admin</option>
+        <option value="account.delete">Deleted own account</option>
+      </select>
+    </div>
+    <div class="admin-table-wrap">
+      <table class="admin-table">
+        <thead>
+          <tr><th>When</th><th>Admin</th><th>Action</th><th>User</th><th>Details</th></tr>
+        </thead>
+        <tbody id="auditBody"></tbody>
+      </table>
+    </div>
+    <div class="admin-pager" id="auditPager"></div>
+  </section>
+
+  <div class="toast" id="toast" role="status"></div>
+  <script src="admin.js"></script>
+</body>
+</html>

@@ -109,25 +109,89 @@
     </a>
 
     <h1>Privacy</h1>
-    <p class="updated">Last updated: October 11, 2026</p>
+    <p class="updated">Last updated: November 1, 2026</p>
 
     <div class="summary">
       <ul>
-        <li>ChalkBack runs entirely in your browser. There is no ChalkBack server, account or database.</li>
-        <li>Your drawings are stored on your device, and in your own Google Drive only if you choose to save them there.</li>
+        <li>You can use ChalkBack without an account. Your board then stays on your device, and in your own Google Drive only if you save it there.</li>
+        <li>An account is optional. If you sign in with Google, ChalkBack's server stores your name, email address, profile picture and the boards you save to your account, so you can open them on other devices and share them.</li>
+        <li>Boards you share are visible only to the people you share them with. ChalkBack's admins can see account details, but not your boards.</li>
+        <li>You can download everything in your account, or delete your account and all your boards, at any time.</li>
         <li>Google Drive access is limited to the files ChalkBack creates or that you pick yourself.</li>
         <li>AI features are optional. When you use one, only the strokes you selected are sent to Anthropic for processing, and you're told so first.</li>
         <li>A Claude API key, if you add one, stays in your browser: for the current tab only, unless you choose to remember it.</li>
-        <li>You can clear everything ChalkBack stores in your browser from Settings at any time.</li>
         <li>No analytics, no advertising, no tracking.</li>
       </ul>
     </div>
 
-    <h2>The app runs in your browser</h2>
+    <h2>Where your boards live</h2>
     <p>
-      ChalkBack is a set of static files (HTML, CSS and JavaScript) served by GitHub Pages. Everything you do,
-      including drawing, undo, replay and PDF export, happens on your own device. We don't operate any server
-      that receives, stores or processes your drawings or personal information.
+      Drawing, undo, replay and PDF export all happen in your browser. Where a board is stored depends on how
+      you use ChalkBack:
+    </p>
+    <ul>
+      <li><strong>Signed out</strong>, or using the board on this device: the board is stored only in your
+        browser. ChalkBack's server never receives it.</li>
+      <li><strong>Boards in your account</strong>: saved on ChalkBack's server as you draw, so you can open
+        them on your other devices and share them.</li>
+      <li><strong>Google Drive</strong>: only when you choose to save there (see below).</li>
+    </ul>
+
+    <h2>Your ChalkBack account</h2>
+    <p>
+      You sign in with your Google account; ChalkBack never sees or stores a password. At sign-in Google tells
+      ChalkBack your Google account ID, name, email address (only if Google has verified it) and profile
+      picture. The server stores these, plus:
+    </p>
+    <ul>
+      <li>a display name, if you set one,</li>
+      <li>the boards you save to your account: drawings, images you add, the board's style, and the
+        undo/replay history with the time of each action,</li>
+      <li>who you've shared each board with (their email address) and whether they can view or edit it,</li>
+      <li>when you joined and when you last signed in.</li>
+    </ul>
+    <p>
+      ChalkBack uses Google only to confirm who you are when you sign in. It doesn't keep Google's sign-in
+      tokens, and signing in to your account gives ChalkBack no access to your Google Drive or any other
+      Google data.
+    </p>
+    <p>
+      Staying signed in uses one cookie, which holds a signed reference to your account. It's sent only to
+      ChalkBack, can't be read by the page's scripts, and lasts 30 days unless you sign out.
+      <strong>Sign out of all devices</strong> (in Settings) ends every session at once.
+    </p>
+
+    <h2>Sharing</h2>
+    <p>
+      When you share a board, you choose an email address and whether that person can view or edit it.
+      ChalkBack doesn't email anyone; you send the link yourself. The link only opens the board for people
+      it's shared with, once they've signed in with that email address. People you share with see your
+      display name (or your Google name) and email address as the board's owner. Anyone who can edit a board
+      can change its content and name.
+    </p>
+
+    <h2>Admins</h2>
+    <p>
+      ChalkBack's administrators can see each account's name, email address, role, status, number of boards,
+      storage used, and when it joined and last signed in. They can disable, enable or delete accounts and
+      sign them out. They can't see your boards' titles or content, unless you share a board with them like
+      anyone else. Admin actions are recorded in a log.
+    </p>
+
+    <h2>Keeping and deleting your data</h2>
+    <p>
+      Your account and boards are kept until you delete them. In <strong>Settings</strong> you can:
+    </p>
+    <ul>
+      <li><strong>Download my data</strong>: a ZIP file with every board you own (in the same format as a
+        Google Drive save) and your account details, including who you've shared boards with.</li>
+      <li><strong>Delete account</strong>: deletes your account, every board you own and the shares on them,
+        and any shares to your email address, straight away. Boards other people shared with you aren't
+        affected. A log entry records that an account was deleted, without your name or email address.</li>
+    </ul>
+    <p>
+      Deleting a board deletes it for everyone it was shared with. An admin can also delete an account, with
+      the same effect.
     </p>
 
     <h2>What's stored on your device</h2>
@@ -136,6 +200,9 @@
       <li><strong>Your board</strong> (<code>localStorage</code>): your drawings, images you add, the view
         position, and the undo/replay history with the time of each action, so your work survives a page
         refresh.</li>
+      <li><strong>Unsaved changes to account boards</strong> (<code>localStorage</code>): if a change can't
+        reach the server (for example while you're offline), a copy is kept until it's saved, so it isn't
+        lost.</li>
       <li><strong>Your Claude API key</strong>, if you add one: in <code>sessionStorage</code> by default,
         which your browser deletes when you close the tab, or in <code>localStorage</code> if you tick
         <strong>Remember key on this device</strong> (see below).</li>
@@ -143,28 +210,30 @@
         once.</li>
     </ul>
     <p>
-      This data never leaves your device unless you save to Google Drive or use an AI feature. To delete it,
-      open <strong>Settings</strong> and choose <strong>Clear local data</strong>, or clear this site's data in
-      your browser settings. Clearing local data doesn't affect files you saved to Google Drive.
+      The board on your device never leaves it unless you save it to your account or Google Drive, or use an
+      AI feature. To delete this data, open <strong>Settings</strong> and choose <strong>Clear local
+      data</strong>, or clear this site's data in your browser settings. Clearing local data also signs you
+      out; it doesn't affect boards in your account or files you saved to Google Drive.
     </p>
 
     <h2>Google Drive</h2>
     <p>
-      Saving to and opening from Google Drive is optional. When you use it, you sign in with Google and grant
-      ChalkBack the <code>drive.file</code> permission. That permission only lets ChalkBack access:
+      Saving to and opening from Google Drive is optional and separate from your ChalkBack account. When you
+      use it, you sign in with Google and grant ChalkBack the <code>drive.file</code> permission. That
+      permission only lets ChalkBack access:
     </p>
     <ul>
       <li>files that ChalkBack itself created in your Drive, and</li>
       <li>files you explicitly choose in the Google file picker.</li>
     </ul>
     <p>
-      ChalkBack cannot see, list, read or change any other files in your Drive. It does not access your
-      name, email address, contacts or any other Google account data.
+      ChalkBack cannot see, list, read or change any other files in your Drive, and Drive access doesn't
+      give it your contacts or any other Google account data.
     </p>
     <p>
-      The sign-in token Google issues is kept only in the page's memory while it's open, and is discarded when
+      The Drive token Google issues is kept only in the page's memory while it's open, and is discarded when
       you close or reload the page. Files are sent directly between your browser and Google; they never pass
-      through any ChalkBack server. <strong>Sign out of Drive</strong> in Settings revokes the token with
+      through ChalkBack's server. <strong>Sign out of Drive</strong> in Settings revokes the token with
       Google straight away. You can also remove ChalkBack's access at any time from your
       <a href="https://myaccount.google.com/connections" target="_blank" rel="noopener">Google Account
       connections</a> page.
@@ -210,26 +279,37 @@
       these services receive standard request details such as your IP address and browser type:
     </p>
     <ul>
-      <li><strong>GitHub Pages</strong> hosts ChalkBack's files
-        (<a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement" target="_blank" rel="noopener">GitHub privacy statement</a>).</li>
+      <!-- TODO before launch (tasks.md T0.1/T8.1): name the hosting and database providers, with links
+           to their privacy policies. -->
+      <li><strong>Our hosting provider</strong> runs ChalkBack's server and database, which store account
+        boards and account details as described above.</li>
       <li><strong>Google</strong> provides sign-in, the file picker and Drive storage
         (<a href="https://policies.google.com/privacy" target="_blank" rel="noopener">Google privacy policy</a>).</li>
       <li><strong>cdnjs (Cloudflare)</strong> serves the jsPDF library used for PDF export
         (<a href="https://www.cloudflare.com/privacypolicy/" target="_blank" rel="noopener">Cloudflare privacy policy</a>).</li>
       <li><strong>Anthropic</strong>, only when you use a Claude feature with your own key, as described above.</li>
     </ul>
-    <p>ChalkBack itself sets no cookies and uses no analytics or advertising services.</p>
+    <p>
+      ChalkBack sets only the sign-in cookie described above, and uses no analytics or advertising
+      services. We don't sell or rent your information, or use it for anything other than running ChalkBack.
+    </p>
 
     <h2>Security</h2>
     <p>
-      ChalkBack's pages use a Content Security Policy that only allows the services listed above. The PDF
-      library is pinned to an exact version and checked against a fixed integrity hash. Boards opened from
-      Google Drive or loaded from your browser are checked strictly before use: anything other than
-      ChalkBack's own board format, including images that point to outside web addresses, is rejected.
+      ChalkBack is served only over HTTPS, and its pages use a Content Security Policy that only allows the
+      services listed above. The PDF library is pinned to an exact version and checked against a fixed
+      integrity hash. Every board, whether opened from your account, a share, Google Drive or your browser,
+      is checked strictly before use: anything other than ChalkBack's own board format, including images
+      that point to outside web addresses, is rejected. The server checks on every request that you're
+      allowed to see or change the board you ask for.
     </p>
 
     <h2>Children</h2>
-    <p>ChalkBack doesn't knowingly collect any personal information from anyone, including children.</p>
+    <!-- TODO before launch (T8.1): the owner to confirm the policy for children's accounts. -->
+    <p>
+      ChalkBack doesn't knowingly collect personal information from children. If you believe a child has
+      created an account, contact us (below) and we'll delete it.
+    </p>
 
     <h2>Changes</h2>
     <p>
