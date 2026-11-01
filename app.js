@@ -763,6 +763,14 @@
     else commit([...shapes, s], strokeAction(s));
   }
 
+  // iOS Safari still runs its double-tap and loupe gestures under touch-action: none, and a
+  // quick second Apple Pencil stroke gets taken as a double-tap: its pointerdown never comes or
+  // is cancelled at once. Cancelling the touch keeps those gestures away; pointer events still
+  // fire. (Left alone for the text tool, where the touch has to focus the text box.)
+  canvas.addEventListener('touchstart', (e) => {
+    if (state.tool !== 'text') e.preventDefault();
+  }, { passive: false });
+
   canvas.addEventListener('pointerup', endGesture);
   canvas.addEventListener('pointercancel', endGesture);
   // Capture is lost when the pointer is released or the browser takes it away; after a normal
